@@ -1,0 +1,4 @@
+# CPU-first. On a laptop without CUDA, `pip install ultralytics` pulls the
+# CPU build of torch automatically, which is all this project needs.
+ultralytics>=8.1.0      # ships YOLOv10 + torch + opencv + numpy
+# (torch, torchvision, opencv-python, numpy come in transitively)

@@ -1,0 +1,12 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Model weights (auto-download via ultralytics)
+*.pt
+
+# Generated data & outputs (regenerable); keep only the comparison images
+data/
+out/*
+!out/compare_*.png
