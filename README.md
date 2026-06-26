@@ -59,19 +59,10 @@ time and builds on x86_64 and aarch64).
 
 ## Data
 
-Two kinds of input are used:
-
-**1. A couple of still images** — for the Step-0 dev run and the comparison
-image. Any JPEGs work:
-```bash
-mkdir -p data/dev
-curl -L https://ultralytics.com/images/bus.jpg    -o data/dev/bus.jpg
-curl -L https://ultralytics.com/images/zidane.jpg -o data/dev/zidane.jpg
-```
-
-**2. A real autonomous-driving sequence** — required for the tracker
-measurement (a tracker only does work across consecutive frames). We use the
-**KITTI Tracking** benchmark:
+A real autonomous-driving **sequence** is the only input needed — the tracker
+measurement requires consecutive frames, and individual frames from it double
+as the still-image inputs for the detector-side and visualization steps. We use
+the **KITTI Tracking** benchmark:
 ```bash
 mkdir -p kitti && cd kitti
 curl -L -C - -o data_tracking_image_2.zip \
@@ -103,20 +94,21 @@ ultralytics 8.4.x).
 
 ### Step 1 — craft the attack + the noise control
 ```bash
-# detector-side proof on the still images (fast)
-python src/attack.py --images data/dev --out out/adv   --device cpu --iters 150
-python src/attack.py --images data/dev --out out/noise --device cpu --mode noise
-
-# the real sequence (used for the tracker measurement)
+# the real KITTI sequence (used for every measurement below)
 python src/attack.py --images data/kitti_0011_clean --out out/kitti_0011_adv \
     --device cpu --iters 40
+
+# same-budget random-noise control (must NOT flood)
+python src/attack.py --images data/kitti_0011_clean --out out/kitti_0011_noise \
+    --device cpu --mode noise
 ```
 Each line logs `above-thresh N -> M`. The attack should give `M ≫ N`; the
 noise control should give `M ≈ N`.
 
-### Step 2 — measure the detector (flat latency, count up)
+### Step 2 — measure the detector (count up; latency caveat below)
 ```bash
-python src/measure.py detector --clean data/dev --adv out/adv --device cpu
+python src/measure.py detector --clean data/kitti_0011_clean \
+    --adv out/kitti_0011_adv --device cpu
 ```
 
 ### Step 3 — measure the tracker on the real sequence (SlowTrack)
@@ -131,8 +123,9 @@ subtract them; the CPU detector's noise dwarfs the sub-ms tracker signal).
 
 ### Step 4 — see what the model sees
 ```bash
-python src/viz.py --clean data/dev/bus.jpg --adv out/adv/bus.jpg \
-    --device cpu --out out/compare_bus.png
+python src/viz.py --clean data/kitti_0011_clean/000010.png \
+    --adv out/kitti_0011_adv/000010.png \
+    --device cpu --out out/compare_kitti_0011.png
 ```
 Produces a side-by-side image: original (a few boxes) vs attacked (saturated
 with phantom boxes), perturbation invisible, with detection-count banners.
