@@ -4,7 +4,7 @@ detector's boxes drawn, stitched side-by-side with detection counts.
 This is the project's visual deliverable — the perturbation is invisible to
 the eye, but the attacked image is saturated with phantom boxes.
 
-    python src/viz.py --clean data/dev/bus.jpg --adv out/adv/bus.jpg --device cpu
+    python src/viz.py --clean data/kitti_0011_clean/000010.png --adv output/kitti_0011_adv/000010.png --device cpu
 """
 import argparse
 import os
@@ -31,9 +31,9 @@ def banner(img, text, h=34):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clean", required=True, help="original image, e.g. data/dev/bus.jpg")
-    ap.add_argument("--adv", required=True, help="attacked image, e.g. out/adv/bus.jpg")
-    ap.add_argument("--out", default="out/compare.png")
+    ap.add_argument("--clean", required=True, help="original image, e.g. data/kitti_0011_clean/000010.png")
+    ap.add_argument("--adv", required=True, help="attacked image, e.g. output/kitti_0011_adv/000010.png")
+    ap.add_argument("--out", default="output/compare.png")
     ap.add_argument("--weights", default="yolov10n.pt")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--conf", type=float, default=0.25, help="match the attack's --tau")

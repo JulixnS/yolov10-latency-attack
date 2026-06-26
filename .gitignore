@@ -8,8 +8,11 @@ __pycache__/
 
 # Generated data & outputs (regenerable); keep only the comparison images
 data/
-out/*
-!out/compare_*.png
+output/*
+!output/compare_*.png
+
+# Personal notes — kept local only, not published
+questions.md
 
 # Local tooling (gh CLI downloaded for pushing)
 .tools/

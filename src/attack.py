@@ -9,8 +9,8 @@ load-bearing: noise must FAIL to flood while the gradient attack succeeds.
 
 CPU-first. Use --device cuda (or auto) on the cluster for bulk crafting.
 
-    python src/attack.py --images data/dev --out out/adv --device cpu --iters 50
-    python src/attack.py --images data/dev --out out/noise --mode noise
+    python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_adv --device cpu --iters 40
+    python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_noise --mode noise
 """
 import argparse
 import glob

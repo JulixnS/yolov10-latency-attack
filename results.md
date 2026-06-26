@@ -9,7 +9,7 @@ Real autonomous-driving evaluation: white-box PGD overload attack on YOLOv10
 Original (6 real detections) vs attacked (72 phantom boxes) — the perturbation
 is invisible to the eye, but the detector is flooded.
 
-![Original vs attacked — KITTI seq 0011 frame 000010](out/compare_kitti_0011.png)
+![Original vs attacked — KITTI seq 0011 frame 000010](output/compare_kitti_0011.png)
 
 ## Setup
 

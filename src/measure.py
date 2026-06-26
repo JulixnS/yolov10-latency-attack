@@ -10,12 +10,12 @@ Measure on the laptop CPU — the tracker is CPU-bound, so this is the
 representative place to run it, not a compromise.
 
     # detector-side (any images): flat latency, exploding count
-    python src/measure.py detector --clean data/dev --adv out/adv --device cpu
+    python src/measure.py detector --clean data/dev --adv output/adv --device cpu
 
     # tracker-side (needs CONSECUTIVE frames / a sequence dir):
-    python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv --device cpu
+    python src/measure.py tracker --clean data/seq_clean --adv output/seq_adv --device cpu
     # ...with SlowTrack's vendored tracker instead of bundled ByteTrack:
-    python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv \
+    python src/measure.py tracker --clean data/seq_clean --adv output/seq_adv \
         --device cpu --tracker slowtrack
 """
 import argparse

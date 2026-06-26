@@ -54,11 +54,11 @@ structure and adapt. Stop here until this passes.
 Run a short attack (low iters for fast CPU iteration) on the dev images.
 
 ```bash
-python src/attack.py --images data/dev --out out/adv --device cpu --iters 20
+python src/attack.py --images data/dev --out output/adv --device cpu --iters 20
 ```
 
 **Acceptance:** per-image log shows `above-thresh N -> M` with **M ≫ N**
-(e.g. `8 -> 300`). `out/adv/` contains the perturbed images, which look
+(e.g. `8 -> 300`). `output/adv/` contains the perturbed images, which look
 near-identical to the originals by eye (that's the eps budget working).
 
 **If M doesn't rise:** raise `--iters` (try 50), check `--tau` matches the
@@ -70,7 +70,7 @@ the mechanism, then dial back.
 ## Phase 3 — Noise control (load-bearing, not optional)
 
 ```bash
-python src/attack.py --images data/dev --out out/noise --device cpu --mode noise
+python src/attack.py --images data/dev --out output/noise --device cpu --mode noise
 ```
 
 **Acceptance:** `above-thresh N -> ~N` (noise at the **same eps** does NOT
@@ -82,7 +82,7 @@ flood). This contrast is the proof that the flood is adversarial, not just
 ## Phase 4 — Detector-side measurement (flat latency, count up)
 
 ```bash
-python src/measure.py detector --clean data/dev --adv out/adv --device cpu
+python src/measure.py detector --clean data/dev --adv output/adv --device cpu
 ```
 
 **Acceptance:** `lat_ms_mean` is **~the same** for CLEAN vs ADVERSARIAL
@@ -99,9 +99,9 @@ busy sequence (more objects → higher attack ceiling).
 
 ```bash
 SEQ=kitti/training/image_02/0011
-python src/attack.py   --images $SEQ --out out/kitti_0011_adv --device cpu --iters 60
-python src/measure.py  tracker --clean $SEQ --adv out/kitti_0011_adv --device cpu --tracker bytetrack
-python src/measure.py  tracker --clean $SEQ --adv out/kitti_0011_adv --device cpu --tracker slowtrack
+python src/attack.py   --images $SEQ --out output/kitti_0011_adv --device cpu --iters 60
+python src/measure.py  tracker --clean $SEQ --adv output/kitti_0011_adv --device cpu --tracker bytetrack
+python src/measure.py  tracker --clean $SEQ --adv output/kitti_0011_adv --device cpu --tracker slowtrack
 ```
 
 `measure.py tracker` runs the detector per frame, then times the
@@ -145,8 +145,8 @@ def banner(img, text, h=34):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--clean", required=True)      # e.g. data/dev/bus.jpg
-    ap.add_argument("--adv", required=True)        # e.g. out/adv/bus.jpg
-    ap.add_argument("--out", default="out/compare.png")
+    ap.add_argument("--adv", required=True)        # e.g. output/adv/bus.jpg
+    ap.add_argument("--out", default="output/compare.png")
     ap.add_argument("--weights", default="yolov10n.pt")
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--conf", type=float, default=0.25)
@@ -170,10 +170,10 @@ if __name__ == "__main__":
 Run it:
 
 ```bash
-python src/viz.py --clean data/dev/bus.jpg --adv out/adv/bus.jpg --device cpu
+python src/viz.py --clean data/dev/bus.jpg --adv output/adv/bus.jpg --device cpu
 ```
 
-**Acceptance / done:** `out/compare.png` shows the **original with a few
+**Acceptance / done:** `output/compare.png` shows the **original with a few
 boxes** on the left and the **attacked image saturated with boxes** on the
 right (perturbation invisible to the eye, boxes everywhere), with the
 `N -> M` counts in the banners. That is the model's-eye view of the attack.
@@ -187,5 +187,5 @@ right (perturbation invisible to the eye, boxes everywhere), with the
 - [ ] P3 noise control does NOT flood
 - [ ] P4 detector latency flat, count up
 - [ ] P5 (later) tracker latency explodes on a sequence
-- [ ] P6 `out/compare.png`: original vs attacked, boxes drawn ✅
+- [ ] P6 `output/compare.png`: original vs attacked, boxes drawn ✅
 ```

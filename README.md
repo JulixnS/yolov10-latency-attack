@@ -95,11 +95,11 @@ ultralytics 8.4.x).
 ### Step 1 — craft the attack + the noise control
 ```bash
 # the real KITTI sequence (used for every measurement below)
-python src/attack.py --images data/kitti_0011_clean --out out/kitti_0011_adv \
+python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_adv \
     --device cpu --iters 40
 
 # same-budget random-noise control (must NOT flood)
-python src/attack.py --images data/kitti_0011_clean --out out/kitti_0011_noise \
+python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_noise \
     --device cpu --mode noise
 ```
 Each line logs `above-thresh N -> M`. The attack should give `M ≫ N`; the
@@ -108,13 +108,13 @@ noise control should give `M ≈ N`.
 ### Step 2 — measure the detector (count up; latency caveat below)
 ```bash
 python src/measure.py detector --clean data/kitti_0011_clean \
-    --adv out/kitti_0011_adv --device cpu
+    --adv output/kitti_0011_adv --device cpu
 ```
 
 ### Step 3 — measure the tracker on the real sequence (SlowTrack)
 ```bash
 python src/measure.py tracker \
-    --clean data/kitti_0011_clean --adv out/kitti_0011_adv \
+    --clean data/kitti_0011_clean --adv output/kitti_0011_adv \
     --device cpu --tracker slowtrack
 ```
 This runs the detector per frame, then times the SlowTrack `update()` call **in
@@ -124,8 +124,8 @@ subtract them; the CPU detector's noise dwarfs the sub-ms tracker signal).
 ### Step 4 — see what the model sees
 ```bash
 python src/viz.py --clean data/kitti_0011_clean/000010.png \
-    --adv out/kitti_0011_adv/000010.png \
-    --device cpu --out out/compare_kitti_0011.png
+    --adv output/kitti_0011_adv/000010.png \
+    --device cpu --out output/compare_kitti_0011.png
 ```
 Produces a side-by-side image: original (a few boxes) vs attacked (saturated
 with phantom boxes), perturbation invisible, with detection-count banners.
@@ -137,7 +137,7 @@ with phantom boxes), perturbation invisible, with detection-count banners.
 **Headline (KITTI Tracking seq 0011, 30 real frames, CPU, warmed, median):**
 the attack floods the detector `5.8 → 94.6` detections/frame (max 123) and the
 **SlowTrack tracker latency goes `0.709 → 3.663 ms = 5.2×`** (active tracks
-`4.7 → 27.4`). See `out/compare_kitti_0011.png` — 6 real detections vs 72
+`4.7 → 27.4`). See `output/compare_kitti_0011.png` — 6 real detections vs 72
 phantom boxes, perturbation invisible.
 
 **Tracker latency multiplier** (the headline payload):
