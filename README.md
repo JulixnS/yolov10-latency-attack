@@ -36,6 +36,7 @@ src/
   attack.py          the PGD attack (+ random-noise control)
   measure.py         latency harness: detector mode + tracker mode (--tracker)
   viz.py             original-vs-attacked comparison image (boxes drawn)
+  make_videos.py     stitch a frame folder into an mp4 (detector boxes drawn)
   slowtrack_tracker/ vendored SlowTrack tracker (see its SOURCE_AND_CHANGES doc)
 results.md           KITTI results + comparison image
 requirements.txt     ultralytics + slowtrack tracker deps
