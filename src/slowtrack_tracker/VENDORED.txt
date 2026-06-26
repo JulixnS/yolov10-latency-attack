@@ -52,12 +52,15 @@ matching.py  (7 edits)
 --------------------------------------------------------------------------------
 FILES ADDED (not from upstream)
 --------------------------------------------------------------------------------
-  __init__.py    — Makes this directory an importable package. Re-exports
-                   BYTETracker and defines a minimal `Timer` (tic/toc/
-                   average_time) used ONLY to satisfy the `stage_track_timer`
-                   argument that BYTETracker.update() requires. The Timer
-                   measures time; it does not affect tracking.
-  VENDORED.txt   — This file.
+  __init__.py        — Makes this directory an importable package. Re-exports
+                       BYTETracker and defines a minimal `Timer` (tic/toc/
+                       average_time) used ONLY to satisfy the `stage_track_timer`
+                       argument that BYTETracker.update() requires. The Timer
+                       measures time; it does not affect tracking.
+  VENDORED.txt       — This file.
+  LICENSE.upstream   — SlowTrack's MIT License (Copyright (c) 2024 ershang2 and
+                       ningfeiwang), preserved here as MIT requires when
+                       redistributing the code.
 
 --------------------------------------------------------------------------------
 RUNTIME DEPENDENCIES (see ../../requirements.txt)
