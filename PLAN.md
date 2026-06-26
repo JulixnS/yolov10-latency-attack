@@ -93,15 +93,15 @@ This is half the thesis: detector unmoved, output saturated.
 
 ## Phase 5 — tracker-side measurement
 
-Needs **consecutive frames**, not the 2 dev images. `make_seq.py` builds a
-local sequence by panning a crop across one image (stand-in for footage);
-swap in real frames later (KITTI tracking dir, or
-`ffmpeg -i clip.mp4 data/seq_clean/%06d.jpg`).
+Needs **real consecutive frames** — a KITTI Tracking sequence (each
+`kitti/training/image_02/<seq>/` is a folder of consecutive PNGs). Pick a
+busy sequence (more objects → higher attack ceiling).
 
 ```bash
-python src/make_seq.py --image data/dev/bus.jpg --out data/seq_clean --frames 16
-python src/attack.py   --images data/seq_clean --out out/seq_adv --device cpu --iters 40
-python src/measure.py  tracker --clean data/seq_clean --adv out/seq_adv --device cpu
+SEQ=kitti/training/image_02/0011
+python src/attack.py   --images $SEQ --out out/kitti_0011_adv --device cpu --iters 60
+python src/measure.py  tracker --clean $SEQ --adv out/kitti_0011_adv --device cpu --tracker bytetrack
+python src/measure.py  tracker --clean $SEQ --adv out/kitti_0011_adv --device cpu --tracker slowtrack
 ```
 
 `measure.py tracker` runs the detector per frame, then times the

@@ -72,9 +72,11 @@ above-threshold; noise control 5→5/2→3 (no flood); detector latency flat
 (263→222 ms), count 3.5→109. Produced `out/compare_*.png`.
 
 ### 14. Set up the tracker-sequence run.
-Built `src/make_seq.py` (local panning sequence) and rewrote `measure.py` to time
-`BYTETracker.update()` in isolation. Result: detector flat (244→230 ms), detections
-5.1→74, **tracker latency 0.556→3.133 ms = 5.6× multiplier**, tracks 5→21.
+Initially built a synthetic panning sequence (`make_seq.py`, since removed) and
+rewrote `measure.py` to time `BYTETracker.update()` in isolation. Result: detector
+flat (244→230 ms), detections 5.1→74, **tracker latency 0.556→3.133 ms = 5.6×
+multiplier**, tracks 5→21. Later replaced the synthetic sequence with real KITTI
+Tracking clips (`make_seq.py` removed).
 
 ### 15. What is seq_clean?
 The clean (un-attacked) 16-frame sequence (a pan over `bus.jpg`), used both as the
