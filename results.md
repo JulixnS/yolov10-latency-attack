@@ -6,8 +6,10 @@ Real autonomous-driving evaluation: white-box PGD overload attack on YOLOv10
 
 ## Visual: what the model sees
 
-Original (6 real detections) vs attacked (72 phantom boxes) — the perturbation
-is invisible to the eye, but the detector is flooded.
+Original (6 real detections) vs attacked (50 phantom boxes) — the perturbation
+is invisible to the eye, but the detector is flooded. Note the phantom boxes are
+confined to the **scene content**; the grey letterbox padding is left clean
+(see the threat-model note below).
 
 ![Original vs attacked — KITTI seq 0011 frame 000010](output/compare_kitti_0011.png)
 
@@ -19,35 +21,52 @@ is invisible to the eye, but the detector is flooded.
 | Tracker | SlowTrack (vendored, `--tracker slowtrack`) |
 | Sequence | KITTI Tracking **seq 0011**, first **30** consecutive frames (375×1242) |
 | Attack | white-box PGD, L∞ ε = 8/255, 40 iters, conf threshold τ = 0.25 |
+| Threat model | perturbation + loss masked to the **scene-content region** |
 | Hardware | laptop **CPU** (timings warmed up, reported as median) |
+
+## Threat model — content-region only
+
+The perturbation and the flood loss are restricted to the **scene-content
+region**, excluding the grey letterbox padding that the preprocessing pipeline
+inserts to make the wide frame square. A real camera attacker controls the
+scene, not that inserted padding, so flooding it would be un-realizable.
+
+Without the mask, the same setup reads `5.8 → 94.6` detections and a `5.2×`
+tracker multiplier — but **~45% of that flood was padding detections** a camera
+attacker could never produce. The content-only numbers below are the honest,
+deployment-realistic result.
 
 ## Detector flood
 
-The attack drives the per-frame detection count up ~16× while remaining
+The attack drives the per-frame detection count up ~9× while remaining
 imperceptible:
 
 | metric | clean | adversarial |
 |---|---|---|
-| dense anchors above threshold (mean) | ~4 | **93.7** (max 122) |
-| post-processed detections / frame (mean) | 5.8 | **94.6** (max 123) |
+| dense anchors above threshold (mean) | ~5 | **51.4** (max 69) |
+| post-processed detections / frame (mean) | 5.8 | **51.7** (max 69) |
 
 The same-budget random-noise control does **not** flood (stays ≈ clean) — the
 flood is adversarial, not just any perturbation.
 
 ## Tracker latency (the headline payload)
 
-SlowTrack `update()` timed in isolation, per frame (median):
+SlowTrack `update()` timed in isolation, per frame:
 
 | metric | clean | adversarial | change |
 |---|---|---|---|
-| **tracker latency** | **0.709 ms** | **3.663 ms** | **5.2×** |
-| tracker latency (mean) | 0.721 ms | 3.651 ms | 5.1× |
-| active tracks | 4.7 | 27.4 | 5.8× |
-| detections / frame | 5.8 | 94.6 | 16× |
+| **tracker latency (median)** | **0.684 ms** | **2.136 ms** | **~3.1×** |
+| tracker latency (mean) | 0.911 ms* | 2.104 ms | 2.3× |
+| active tracks | 4.7 | 17.5 | 3.7× |
+| detections / frame | 5.8 | 51.7 | ~9× |
 
-**The attack slows the downstream tracker ~5.2×** for an imperceptible change to
-the camera frame, even though the detector removed NMS specifically to be
-end-to-end. The latency surface didn't disappear — it relocated to the tracker.
+\* the clean mean is inflated by a single first-frame outlier; the **median** is
+the robust figure, hence the ~3.1× headline.
+
+**The attack slows the downstream tracker ~3.1×** for an imperceptible,
+camera-realizable change to the frame, even though the detector removed NMS
+specifically to be end-to-end. The latency surface didn't disappear — it
+relocated to the tracker.
 
 ## Detector latency — honest caveat
 
@@ -55,19 +74,19 @@ The detector's forward is **fixed-FLOP** and does not grow with the flood
 (verified in isolation: clean vs adversarial forward ≈ **193 vs 196 ms**), so
 algorithmically it can't be slowed — that is the NMS-free thesis.
 
-End-to-end CPU `predict()` *does* show inference rising ~**113 → 250 ms (≈1.4×)**
-on adversarial frames, but this is a **denormal-float artifact**: the
-perturbation drives subnormal values into the fused Conv+BN path, which is slow
-on CPU. Evidence:
+End-to-end CPU `predict()` *does* show inference rising (~**106 → 229 ms** here),
+but this is a **denormal-float artifact**: the perturbation drives subnormal
+values into the fused Conv+BN path, which is slow on CPU. Evidence:
 
 - Ultralytics per-stage timing: preprocess and **postprocess flat (0.2 ms)**;
-  all growth is in **inference** (116 → 233 ms).
-- `torch.set_flush_denormal(True)` cuts the ratio from **1.42× → 1.11×**.
+  all growth is in **inference**.
+- In a controlled same-frame test the denormal-attributable slowdown is ≈1.4×,
+  and `torch.set_flush_denormal(True)` cuts it to ≈1.1×.
 - GPUs flush denormals to zero by default, so this effect is absent there.
 
 Conclusion: the detector slowdown is a CPU-test-rig effect, not a real
 detector-side latency attack. The robust, deployment-relevant payload is the
-**tracker (5.2×)**.
+**tracker (~3.1×)**.
 
 ## Reproduce
 

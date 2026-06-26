@@ -140,16 +140,24 @@ with phantom boxes), perturbation invisible, with detection-count banners.
 ## Results
 
 **Headline (KITTI Tracking seq 0011, 30 real frames, CPU, warmed, median):**
-the attack floods the detector `5.8 → 94.6` detections/frame (max 123) and the
-**SlowTrack tracker latency goes `0.709 → 3.663 ms = 5.2×`** (active tracks
-`4.7 → 27.4`). See `output/compare_kitti_0011.png` — 6 real detections vs 72
-phantom boxes, perturbation invisible.
+the attack floods the detector `5.8 → 51.7` detections/frame (max 69) and the
+**SlowTrack tracker latency goes `0.684 → 2.136 ms = ~3.1×`** (active tracks
+`4.7 → 17.5`). See `output/compare_kitti_0011.png` — 6 real detections vs 50
+phantom boxes, perturbation invisible, all in the scene content (grey letterbox
+padding is left clean).
+
+**Threat model — content-region only.** The perturbation and the loss are
+masked to the **scene-content region**, excluding the grey letterbox padding the
+preprocessing pipeline inserts. A real camera attacker controls the scene, not
+that padding, so flooding it would be cheating. (Without the mask the same setup
+reads `5.8 → 94.6` detections / `5.2×`; ~45% of that flood was un-realizable
+padding detections — the content-only numbers below are the honest result.)
 
 **Tracker latency multiplier** (the headline payload):
 
 | sequence                    | tracker   | clean ms | adv ms | multiplier |
 |-----------------------------|-----------|----------|--------|------------|
-| **KITTI seq 0011 (real)**   | slowtrack | 0.709    | 3.663  | **5.2×**   |
+| **KITTI seq 0011 (real, content-masked)** | slowtrack | 0.684 | 2.136 | **~3.1×** |
 | synthetic 16-frame (legacy) | slowtrack | 0.685    | 2.814  | 4.1×       |
 | synthetic 16-frame (legacy) | bytetrack | 0.556    | 3.133  | 5.6×       |
 
@@ -159,10 +167,11 @@ The primary downstream consumer is **SlowTrack** (`--tracker slowtrack`);
 **On the detector latency — an honest nuance.** The detector's forward is
 fixed-FLOP (verified: clean vs adversarial forward ≈ 193 vs 196 ms in
 isolation), so algorithmically it can't be slowed — that's the NMS-free thesis.
-But end-to-end CPU `predict()` *does* show inference `~113 → 250 ms (≈1.4×)` on
-the flood. That extra cost is a **denormal-float artifact**: the perturbation
-drives subnormal values into the fused Conv+BN path, which is slow on CPU.
-`torch.set_flush_denormal(True)` cuts it from 1.42× to 1.11×, and GPUs flush
+But end-to-end CPU `predict()` *does* show inference rising on the flood
+(~106 → 229 ms here). That extra cost is a **denormal-float artifact**: the
+perturbation drives subnormal values into the fused Conv+BN path, which is slow
+on CPU. In a controlled same-frame test the denormal-attributable slowdown is
+≈1.4×, and `torch.set_flush_denormal(True)` cuts it to ≈1.1×; GPUs flush
 denormals by default — so this is a CPU-test-rig effect, not a real detector
 latency attack. The robust, deployment-relevant payload is the **tracker**.
 

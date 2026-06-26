@@ -40,15 +40,26 @@ def letterbox(im: np.ndarray, new: int = 640, color: int = 114):
     return padded, r, (dw, dh)
 
 
-def image_to_tensor(path: str, imgsz: int, device: str) -> torch.Tensor:
-    """Load an image from disk -> letterboxed [1,3,imgsz,imgsz] float tensor in [0,1], RGB."""
+def image_to_tensor(path: str, imgsz: int, device: str):
+    """Load an image from disk -> letterboxed [1,3,imgsz,imgsz] float tensor in [0,1], RGB.
+
+    Also returns the scene-content rectangle (x0, y0, x1, y1) in imgsz coords —
+    the region holding the real (resized) image, excluding the grey letterbox
+    padding. The attack masks the perturbation and the loss to this region so it
+    can't cheat by flooding the padding (which a real camera attacker can't touch).
+    """
     bgr = cv2.imread(path)
     if bgr is None:
         raise FileNotFoundError(path)
-    padded, _, _ = letterbox(bgr, imgsz)
+    padded, r, (dw, dh) = letterbox(bgr, imgsz)
     rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
     t = torch.from_numpy(rgb).to(device).float().div(255.0)
-    return t.permute(2, 0, 1).unsqueeze(0).contiguous()  # [1,3,H,W]
+    t = t.permute(2, 0, 1).unsqueeze(0).contiguous()       # [1,3,H,W]
+    h, w = bgr.shape[:2]
+    nh, nw = round(h * r), round(w * r)                     # resized content size
+    x0, y0 = round(dw - 0.1), round(dh - 0.1)              # matches letterbox padding
+    content = (x0, y0, x0 + nw, y0 + nh)
+    return t, content
 
 
 class YoloV10Dense:
@@ -95,3 +106,9 @@ class YoloV10Dense:
         boxes = y[:, :4, :]
         conf = y[:, 4:, :].amax(dim=1)     # max over class channels -> per-anchor confidence
         return boxes, conf
+
+    def anchor_centers(self):
+        """Pixel-space (x, y) centers of every anchor, [A] each. Valid after a
+        dense() call (the head caches `anchors`/`strides` during _inference)."""
+        a, s = self.head.anchors, self.head.strides   # a:[2,A] grid+0.5 units, s:[1,A]
+        return a[0] * s[0], a[1] * s[0]

@@ -32,26 +32,47 @@ def weighted_var(v, w, eps=1e-6):
     return var.mean()
 
 
-def pgd_attack(model, x0, tau, alpha, eps, step, iters, lam, imgsz):
-    """Returns adversarial image (same shape as x0, in [0,1])."""
+def pixel_mask(x0, content):
+    """[1,1,H,W] mask: 1 inside the scene-content rect, 0 in the letterbox padding."""
+    x0c, y0c, x1c, y1c = content
+    m = torch.zeros_like(x0[:, :1])
+    m[:, :, y0c:y1c, x0c:x1c] = 1.0
+    return m
+
+
+def anchor_mask(model, content):
+    """[A] mask of anchors whose center lies in the scene-content rect. Restricts
+    the flood/spread loss to content anchors (valid after a dense() call)."""
+    ax, ay = model.anchor_centers()
+    x0c, y0c, x1c, y1c = content
+    return ((ax >= x0c) & (ax < x1c) & (ay >= y0c) & (ay < y1c)).float()
+
+
+def pgd_attack(model, x0, content, tau, alpha, eps, step, iters, lam, imgsz):
+    """Returns adversarial image (same shape as x0, in [0,1]). The perturbation
+    and the loss are restricted to the scene-content region (no padding cheating)."""
+    pmask = pixel_mask(x0, content)
+    model.dense(x0)                                  # populate head anchors for the mask
+    amask = anchor_mask(model, content)
     delta = torch.zeros_like(x0, requires_grad=True)
     for _ in range(iters):
         boxes, conf = model.dense((x0 + delta).clamp(0, 1))
-        w = torch.sigmoid(alpha * (conf - tau))         # soft "is a detection"
-        flood = w.sum(dim=1).mean()                      # L_flood: maximize count
+        w = torch.sigmoid(alpha * (conf - tau)) * amask   # only content anchors
+        flood = w.sum(dim=1).mean()                       # L_flood: maximize count
         cx = (boxes[:, 0, :] + boxes[:, 2, :]) / 2 / imgsz   # box centers (boxes are xyxy)
         cy = (boxes[:, 1, :] + boxes[:, 3, :]) / 2 / imgsz
         spread = weighted_var(cx, w) + weighted_var(cy, w)   # L_spread: diversity
         loss = -(flood + lam * spread)                   # PGD minimizes -> count goes up
         g = torch.autograd.grad(loss, delta)[0]
         delta = (delta - step * g.sign()).clamp(-eps, eps)
+        delta = delta * pmask                            # freeze padding pixels at grey
         delta = ((x0 + delta).clamp(0, 1) - x0).detach().requires_grad_(True)
     return (x0 + delta).clamp(0, 1).detach()
 
 
-def random_noise(x0, eps):
-    """Control: uniform L-inf noise of the same budget, no gradient signal."""
-    d = (torch.rand_like(x0) * 2 - 1) * eps
+def random_noise(x0, content, eps):
+    """Control: uniform L-inf noise of the same budget, restricted to content."""
+    d = (torch.rand_like(x0) * 2 - 1) * eps * pixel_mask(x0, content)
     return (x0 + d).clamp(0, 1).detach()
 
 
@@ -91,20 +112,21 @@ def main():
         raise SystemExit(f"no images found in {args.images}")
 
     for i, p in enumerate(paths):
-        x0 = image_to_tensor(p, args.imgsz, device)
+        x0, content = image_to_tensor(p, args.imgsz, device)
         with torch.no_grad():
             _, c0 = model.dense(x0)
-        before = int((c0 > args.tau).sum())
+            amask = anchor_mask(model, content)          # count content anchors only
+        before = int(((c0 > args.tau).float() * amask).sum())
 
         if args.mode == "attack":
-            adv = pgd_attack(model, x0, args.tau, args.alpha, args.eps,
+            adv = pgd_attack(model, x0, content, args.tau, args.alpha, args.eps,
                              args.step, args.iters, args.lam, args.imgsz)
         else:
-            adv = random_noise(x0, args.eps)
+            adv = random_noise(x0, content, args.eps)
 
         with torch.no_grad():
             _, c1 = model.dense(adv)
-        after = int((c1 > args.tau).sum())
+        after = int(((c1 > args.tau).float() * amask).sum())
 
         out_path = os.path.join(args.out, os.path.basename(p))
         cv2.imwrite(out_path, tensor_to_bgr(adv))
