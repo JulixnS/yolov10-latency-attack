@@ -1,79 +1,202 @@
-# YOLOv10 NMS-free latency (sponge/overload) attack
+# YOLOv10 NMS-free latency (sponge / overload) attack
 
-White-box PGD attack that floods an NMS-free YOLOv10 detector with diverse
-phantom detections to overload the downstream tracker. The detector itself
-stays flat (fixed compute); the latency damage lands one layer downstream.
+A white-box PGD attack that adds an **invisible perturbation** to a camera
+frame, making an **NMS-free YOLOv10** detector emit a flood of phantom
+detections. The detector's own latency stays flat (its forward pass is fixed
+compute), but the flood overloads the **downstream tracker** — so the attack
+demonstrates that *removing NMS closes the detector-side latency surface but
+relocates the damage one layer downstream.*
 
-CPU-first — runs on a laptop with no GPU. Flip `--device cuda`/`auto` for
-bulk crafting on the cluster, then bring the adversarial frames back to the
-laptop to measure (the tracker is CPU-bound, so the laptop is the right
-place for the headline result).
+- **Target:** YOLOv10 (one-to-one head, no NMS). The attack defeats the head's
+  *learned* duplicate suppression instead of exploiting an NMS stage.
+- **Payload:** a multi-object tracker (SlowTrack / ByteTrack), whose per-frame
+  association cost scales super-linearly with the number of detections.
+- **Runs on a laptop CPU** — no GPU required.
+
+---
+
+## Thesis, in four numbers
+
+A correct run shows this chain (detector flat, output flooded, noise control
+fails, tracker latency explodes):
+
+1. detector latency: ~unchanged (fixed compute)
+2. detections/frame: up ~15–30×
+3. same-budget random noise: does **not** flood (the control)
+4. tracker latency: up several × while the detector stays flat
+
+---
+
+## Repository layout
+
+```
+src/
+  common.py          model wrapper + the dense-tensor hook, letterbox, device flag
+  verify.py          STEP 0 gate — confirms tensor layout + gradient flow
+  attack.py          the PGD attack (+ random-noise control)
+  measure.py         latency harness: detector mode + tracker mode (--tracker)
+  viz.py             original-vs-attacked comparison image (boxes drawn)
+  slowtrack_tracker/ vendored SlowTrack tracker (see its SOURCE_AND_CHANGES doc)
+PLAN.md              phase-by-phase runbook with acceptance checks
+questions.md         Q&A log of the design decisions
+requirements.txt     ultralytics + slowtrack tracker deps
+```
+
+---
 
 ## Install
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt        # pulls CPU torch automatically
+pip install -r requirements.txt
 ```
 
-## Run, in order
-```bash
-# 0. CONFIRM the model tensor layout + gradient flow on your Ultralytics version
-python src/verify.py --device cpu
+This pulls a CPU build of torch automatically, plus `lap` and `cython_bbox`
+(needed by the vendored SlowTrack tracker; `cython_bbox` compiles at install
+time and builds on x86_64 and aarch64).
 
-# 1. Craft the attack and the noise control (dev: small folder, fewer iters)
-python src/attack.py --images data/dev --out out/adv   --device cpu --iters 20
+---
+
+## Data
+
+Two kinds of input are used:
+
+**1. A couple of still images** — for the Step-0 dev run and the comparison
+image. Any JPEGs work:
+```bash
+mkdir -p data/dev
+curl -L https://ultralytics.com/images/bus.jpg    -o data/dev/bus.jpg
+curl -L https://ultralytics.com/images/zidane.jpg -o data/dev/zidane.jpg
+```
+
+**2. A real autonomous-driving sequence** — required for the tracker
+measurement (a tracker only does work across consecutive frames). We use the
+**KITTI Tracking** benchmark:
+```bash
+mkdir -p kitti && cd kitti
+curl -L -C - -o data_tracking_image_2.zip \
+  https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_image_2.zip   # 14.7 GB
+unzip -q data_tracking_image_2.zip 'training/image_02/0011/*'                 # one busy seq
+cd ..
+# build a CPU-tractable 30-frame clean subset of consecutive frames
+mkdir -p data/kitti_0011_clean
+ls kitti/training/image_02/0011/*.png | sort | head -30 \
+  | xargs -I{} cp {} data/kitti_0011_clean/
+```
+(`kitti/` is gitignored — the dataset is never committed.) Any other KITTI
+sequence, MOT17/20, or `ffmpeg`-extracted dashcam clip works the same way —
+the pipeline just consumes a folder of consecutive frames.
+
+---
+
+## Reproduce the results
+
+### Step 0 — verify the model wiring (mandatory gate)
+```bash
+python src/verify.py --device cpu
+```
+Pass = `conf` shape `[1, 8400]`, ~0 anchors above threshold on random input,
+and a nonzero input-gradient (`OK`). If it instead reports a post-top-k
+`[1,300,6]` shape, your Ultralytics version hides the dense tensor and
+`common.py`'s forward-hook path is what recovers it (already handled for
+ultralytics 8.4.x).
+
+### Step 1 — craft the attack + the noise control
+```bash
+# detector-side proof on the still images (fast)
+python src/attack.py --images data/dev --out out/adv   --device cpu --iters 150
 python src/attack.py --images data/dev --out out/noise --device cpu --mode noise
 
-# 2. Measure: detector flat + count up; tracker latency explodes
-python src/measure.py detector --clean data/dev --adv out/adv   --device cpu
-python src/measure.py tracker  --clean data/seq_clean --adv out/seq_adv --device cpu
+# the real sequence (used for the tracker measurement)
+python src/attack.py --images data/kitti_0011_clean --out out/kitti_0011_adv \
+    --device cpu --iters 40
+```
+Each line logs `above-thresh N -> M`. The attack should give `M ≫ N`; the
+noise control should give `M ≈ N`.
+
+### Step 2 — measure the detector (flat latency, count up)
+```bash
+python src/measure.py detector --clean data/dev --adv out/adv --device cpu
 ```
 
-## Where to get images
-
-**Dev / detector-side flooding** — any images work:
-- Zero setup: `data/dev` with a few JPEGs. Quick grab:
-  `curl -L https://ultralytics.com/images/bus.jpg -o data/dev/bus.jpg`
-- 128-image set: `curl -L https://ultralytics.com/assets/coco128.zip -o coco128.zip && unzip`
-- Full COCO val2017 (5k imgs, ~1GB): `http://images.cocodataset.org/zips/val2017.zip`
-
-**Tracker-side measurement — needs CONSECUTIVE frames, not random images.**
-The tracker payload only shows up on a temporally coherent sequence:
-- KITTI tracking sequences (you already have KITTI staged) — ideal AV framing.
-- MOT17 / MOT20: https://motchallenge.net
-- Any dashcam clip: `ffmpeg -i clip.mp4 data/seq_clean/%06d.jpg`
-Then run `attack.py` over `data/seq_clean` to produce `out/seq_adv`, and
-measure both with `measure.py tracker`.
-
-## Two pitfalls (see code comments)
-1. **Craft in the model's 640x640 letterboxed [0,1] space**, not on the raw
-   JPEG — re-letterboxing a perturbed JPEG resamples and washes out delta.
-   `common.image_to_tensor` keeps this consistent.
-2. **`--tau` must equal the deployed `conf` threshold** (default 0.25).
-
-## Tracker backends
-`measure.py tracker` supports two downstream consumers via `--tracker`:
-- `bytetrack` (default) — Ultralytics' bundled ByteTrack.
-- `slowtrack` — SlowTrack's ByteTrack-lineage MOT, vendored in
-  `src/slowtrack_tracker/` from https://github.com/ershang2/SlowTrack
-  (patched: relative imports, `np.float`→`float`, debug prints removed).
-
-The harness times `tracker.update()` in isolation and reports detector vs
-tracker latency separately. Both backends show the attack overloading the
-tracker while the detector stays flat (CPU, 16-frame sequence):
-
-| tracker   | clean ms | adv ms | multiplier | tracks clean→adv |
-|-----------|----------|--------|------------|------------------|
-| bytetrack | 0.556    | 3.133  | 5.6×       | 5 → 21           |
-| slowtrack | 0.685    | 2.814  | 4.1×       | 5 → 19           |
-
+### Step 3 — measure the tracker on the real sequence (SlowTrack)
 ```bash
-python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv \
+python src/measure.py tracker \
+    --clean data/kitti_0011_clean --adv out/kitti_0011_adv \
     --device cpu --tracker slowtrack
 ```
+This runs the detector per frame, then times the SlowTrack `update()` call **in
+isolation** (reporting `det_ms_mean` and `tracker_ms_mean` separately — don't
+subtract them; the CPU detector's noise dwarfs the sub-ms tracker signal).
+
+### Step 4 — see what the model sees
+```bash
+python src/viz.py --clean data/dev/bus.jpg --adv out/adv/bus.jpg \
+    --device cpu --out out/compare_bus.png
+```
+Produces a side-by-side image: original (a few boxes) vs attacked (saturated
+with phantom boxes), perturbation invisible, with detection-count banners.
+
+---
+
+## Results
+
+**Detector (still images, dev):** latency ~flat `263 → 222 ms`, detections
+`3.5 → 109` (≈31×). Same-budget random noise does **not** flood.
+
+**Tracker latency multiplier** (detector stays flat throughout):
+
+| sequence                    | tracker   | clean ms | adv ms | multiplier |
+|-----------------------------|-----------|----------|--------|------------|
+| synthetic 16-frame (legacy) | bytetrack | 0.556    | 3.133  | 5.6×       |
+| synthetic 16-frame (legacy) | slowtrack | 0.685    | 2.814  | 4.1×       |
+| KITTI seq 0011 (30 frames)  | slowtrack | _pending — filled in when the current run completes_ |
+
+The primary downstream consumer is **SlowTrack** (`--tracker slowtrack`);
+`--tracker bytetrack` (Ultralytics' bundled ByteTrack) remains available for
+comparison.
+
+---
+
+## Two pitfalls (see code comments)
+
+1. **Craft in the model's 640×640 letterboxed [0,1] space**, not on the raw
+   JPEG — re-letterboxing a perturbed JPEG resamples and washes out delta.
+   `common.image_to_tensor` keeps this consistent.
+2. **`--tau` must equal the deployed `conf` threshold** (default 0.25) — the
+   attack parks detections just above that line.
 
 ## Honest bounds
+
 - `max_det` (default 300) caps the per-frame flood; the attack pins the
   pipeline at that worst case *every frame*, it does not grow unbounded.
-- The random-noise control must FAIL to flood — that contrast is the proof
-  the learned suppression is robust to noise but not to adversarial input.
+- On a CPU laptop the detector (~hundreds of ms) dwarfs the tracker (sub-ms).
+  The tracker **multiplier** is the result — in a real deployment the detector
+  runs on GPU (~ms) and the tracker is the bottleneck, which is the regime the
+  multiplier represents.
+- The random-noise control must FAIL to flood — that contrast is the proof the
+  NMS-free head's learned suppression is robust to noise but not to adversarial
+  input.
+
+## Vendored SlowTrack tracker
+
+`src/slowtrack_tracker/` is SlowTrack's ByteTrack-lineage MOT, vendored from
+https://github.com/ershang2/SlowTrack with only mechanical patches (relative
+imports, `np.float`→`float`, debug prints removed). Full provenance, per-file
+change log, and the upstream MIT license are in
+`src/slowtrack_tracker/Slowtrack_source_and_changes.txt`.
+
+---
+
+## What changed during development (summary)
+
+- Re-scoped from YOLOv11 (uses NMS) to **YOLOv10** (NMS-free) — the attack must
+  defeat the head's *learned* suppression and push damage downstream.
+- Added a **forward-hook dense-tensor extractor** in `common.py` because
+  ultralytics 8.4.x returns a post-top-k tensor and builds its one2one branch
+  from detached features (neither is differentiable to the input).
+- Built the **isolated-timing** tracker harness (don't subtract detector time).
+- Added a **`--tracker {bytetrack,slowtrack}`** flag and vendored the real
+  **SlowTrack** tracker as the downstream consumer.
+- Replaced the early synthetic panning sequence (`make_seq.py`, removed) with
+  **real KITTI Tracking** frames.
