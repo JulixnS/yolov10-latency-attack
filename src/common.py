@@ -1,13 +1,19 @@
-"""Shared helpers: device selection, letterbox preprocessing, and the
-YOLOv10 wrapper that exposes the *dense one2one* predictions (pre top-k)
-as a differentiable tensor.
+"""Shared helpers used by every other script: pick the device, turn an image
+into the exact tensor the model expects, and wrap the YOLOv10 model so the
+attack can read its raw, per-location confidence scores.
 
-The whole attack hinges on getting the dense, pre-selection confidence
-tensor out of the model. Ultralytics' `.predict()` hides it behind a
-`torch.no_grad()` postprocess, so we call the underlying nn.Module forward
-directly. Different Ultralytics versions return slightly different shapes,
-so `verify.py` should be run once to confirm the layout before trusting
-the attack.
+Background for a first read:
+  * The detector looks at ~8400 fixed locations ("anchors") in the image and,
+    for each, outputs how confident it is that an object is there. Normally the
+    model keeps only its top few hundred best guesses ("top-k") and hands those
+    back — the rest are thrown away.
+  * The attack needs ALL ~8400 raw confidences, and it needs them in a form
+    PyTorch can take gradients of (so it can work out how to nudge pixels). That
+    raw, full, gradient-trackable tensor is what `YoloV10Dense.dense()` returns.
+  * Ultralytics' normal `.predict()` won't give us that — it discards the raw
+    scores and turns off gradient tracking. So we reach inside the model with a
+    hook (explained on the class below). `verify.py` checks this still works on
+    your Ultralytics version before you trust any results.
 """
 import cv2
 import numpy as np
@@ -23,10 +29,15 @@ def get_device(flag: str = "cpu") -> str:
 
 
 def letterbox(im: np.ndarray, new: int = 640, color: int = 114):
-    """Resize+pad a BGR uint8 image to a square `new`x`new`, preserving aspect.
+    """Fit a wide/tall image into a square `new`x`new` box without distorting it:
+    scale it down to fit, then pad the leftover space with flat grey (value 114).
+    This is exactly what YOLO does internally, and it's how a 1242x375 KITTI frame
+    becomes a 640x640 input with grey bars on top and bottom.
 
-    Returns (padded_bgr, ratio, (dw, dh)) so detections can be mapped back.
-    Crafting MUST happen in this exact space — see README pitfall #1.
+    Returns (padded_bgr, ratio, (dw, dh)): the padded image, the scale factor used,
+    and the (width, height) padding added on each side. The attack must run in this
+    same padded space — perturbing the original then re-letterboxing would resample
+    the image and wash out the tiny perturbation (README pitfall #1).
     """
     h, w = im.shape[:2]
     r = min(new / h, new / w)
@@ -63,52 +74,70 @@ def image_to_tensor(path: str, imgsz: int, device: str):
 
 
 class YoloV10Dense:
-    """Wraps an Ultralytics YOLOv10 model and exposes the dense one2one
-    decoded predictions (boxes + confidences) for white-box gradient attacks.
+    """Wraps a YOLOv10 model so the attack can read its raw per-anchor scores
+    with gradients attached. `dense(image)` returns a box and a confidence for
+    every one of the ~8400 anchors — the numbers the attack tries to push over
+    the detection threshold.
 
-    Why a hook: on ultralytics 8.4.x the model forward returns the *post-top-k*
-    `[B, max_det, 6]` tensor, and the head computes its one2one branch from
-    DETACHED features (`x_detach`), so neither gives a differentiable dense
-    tensor. We instead capture the head's non-detached input feature maps via a
-    forward pre-hook and recompute the one2one branch ourselves. The forward
-    values are identical to what's deployed; we just keep the graph to the input.
+    The "hook" trick (the awkward but necessary part):
+      YOLOv10 has two output heads. Only the "one2one" head is used at inference
+      (it's the one that lets the model skip NMS). But Ultralytics 8.4.x makes
+      that head hard to attack two ways at once:
+        1. The public forward only returns the final ~300 kept boxes, not the
+           raw 8400 — the rest are discarded before we ever see them.
+        2. Internally it computes the one2one head from a *detached* copy of the
+           features, which severs the gradient path back to the input pixels.
+      So we register a "forward pre-hook": a callback that fires just before the
+      detection head runs and snapshots its *input* feature maps (which still
+      carry gradients). We then re-run the one2one head ourselves on those
+      features. Same numbers the deployed model produces, but now we have all
+      8400 of them AND a gradient path to the pixels.
     """
 
     def __init__(self, weights: str = "yolov10n.pt", device: str = "cpu"):
-        self.yolo = YOLO(weights)          # keep the high-level API for measurement
+        self.yolo = YOLO(weights)          # high-level API, used later for measurement
         self.net = self.yolo.model.to(device).eval()
-        for p in self.net.parameters():    # freeze the victim: we attack the input, not the weights
+        # Freeze the model: the attack optimizes the input image, never the weights.
+        for p in self.net.parameters():
             p.requires_grad_(False)
         self.device = device
-        self.head = self.net.model[-1]     # v10Detect head
+        self.head = self.net.model[-1]     # the detection head (last layer)
         if not getattr(self.head, "end2end", False):
             raise RuntimeError("Head is not end2end — is this really a YOLOv10 model?")
         self._feats = None
+        # Install the callback that snapshots the head's input features each forward.
         self.head.register_forward_pre_hook(self._capture)
 
     def _capture(self, module, args):
-        # args[0] is the list of P3/P4/P5 feature maps feeding the head, with the
-        # graph back to the input intact (the detach inside the head is on a copy).
+        # Fires right before the head runs. args[0] is the list of feature maps
+        # (P3/P4/P5, the three resolution levels) feeding the head — captured here
+        # while they still have a gradient path back to the input image.
         self._feats = list(args[0])
 
     def dense(self, x: torch.Tensor):
-        """x: [B,3,H,W] in [0,1]. Returns (boxes, conf):
-        boxes: [B, 4, A]   (xyxy in pixels at imgsz scale, decoded across all strides)
-        conf:  [B, A]      (max class probability per anchor; the value NMS-free top-k filters on)
+        """Run the model on image `x` ([B,3,H,W], pixel values in [0,1]) and
+        return the raw, full prediction set:
+            boxes: [B, 4, A]  — a box (x1,y1,x2,y2) for each of the A=~8400 anchors
+            conf:  [B, A]     — each anchor's confidence (its highest class score)
+        The attack reads `conf` and tries to push as many entries as possible
+        above the detection threshold.
         """
         self._feats = None
-        self.net(x)                        # triggers the pre-hook; also caches anchors/shape
+        self.net(x)                        # runs the model; our pre-hook grabs the features
         if self._feats is None:
             raise RuntimeError("head pre-hook did not fire — model structure changed")
-        # Recompute the one2one branch from the NON-detached features -> differentiable.
+        # Re-run the one2one head ourselves on the captured (non-detached) features
+        # so the result is differentiable w.r.t. the input pixels.
         preds = self.head.forward_head(self._feats, **self.head.one2one)
-        y = self.head._inference(preds)    # [B, 4+nc, A]
-        boxes = y[:, :4, :]
-        conf = y[:, 4:, :].amax(dim=1)     # max over class channels -> per-anchor confidence
+        y = self.head._inference(preds)    # decode -> [B, 4 box coords + nc class scores, A]
+        boxes = y[:, :4, :]                # first 4 channels = box coordinates
+        conf = y[:, 4:, :].amax(dim=1)     # confidence = the single highest class score
         return boxes, conf
 
     def anchor_centers(self):
-        """Pixel-space (x, y) centers of every anchor, [A] each. Valid after a
-        dense() call (the head caches `anchors`/`strides` during _inference)."""
-        a, s = self.head.anchors, self.head.strides   # a:[2,A] grid+0.5 units, s:[1,A]
-        return a[0] * s[0], a[1] * s[0]
+        """Where each anchor sits in the image: its (x, y) pixel center, one per
+        anchor. Used to tell which anchors fall in the real scene vs. the grey
+        padding. Only valid after a dense() call has run (it populates the head's
+        cached anchor grid)."""
+        a, s = self.head.anchors, self.head.strides   # grid coords (a) and cell size (s)
+        return a[0] * s[0], a[1] * s[0]               # grid coords x cell size = pixels

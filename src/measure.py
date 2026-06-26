@@ -1,21 +1,22 @@
-"""Latency measurement harness — the part that produces the evidence.
+"""Measures how much the attack costs in wall-clock time — this is where the
+result numbers come from. It compares a folder of clean frames against the
+matching folder of attacked frames, two ways:
 
-Thesis to demonstrate:
-  * DETECTOR latency stays ~flat clean vs adversarial (NMS-free forward is
-    fixed compute) while detection COUNT jumps to ~max_det.
-  * TRACKER latency EXPLODES on the adversarial stream (association cost
-    scales with detection count).
+  * `detector` mode: time the detector and count its detections per frame. The
+    count jumps under attack; the forward's compute is fixed (NMS-free), so any
+    latency rise here is a CPU artifact, not a real slowdown (see README).
+  * `tracker` mode: feed each frame's detections into a tracker and time just the
+    tracker's update() call. THIS is the payload — the tracker's per-frame cost
+    grows with the number of detections, so it slows sharply under the flood.
 
-Measure on the laptop CPU — the tracker is CPU-bound, so this is the
-representative place to run it, not a compromise.
+Run on a CPU: the tracker is CPU-bound, so the laptop is the representative
+place to measure it. Two tracker backends are available via --tracker.
 
-    # detector-side (any images): flat latency, exploding count
-    python src/measure.py detector --clean data/dev --adv output/adv --device cpu
+    # detector side (any images): count up
+    python src/measure.py detector --clean data/kitti_0011_clean --adv output/kitti_0011_adv --device cpu
 
-    # tracker-side (needs CONSECUTIVE frames / a sequence dir):
-    python src/measure.py tracker --clean data/seq_clean --adv output/seq_adv --device cpu
-    # ...with SlowTrack's vendored tracker instead of bundled ByteTrack:
-    python src/measure.py tracker --clean data/seq_clean --adv output/seq_adv \
+    # tracker side (needs a real sequence of consecutive frames):
+    python src/measure.py tracker --clean data/kitti_0011_clean --adv output/kitti_0011_adv \
         --device cpu --tracker slowtrack
 """
 import argparse
@@ -34,8 +35,12 @@ from ultralytics.utils import ROOT
 from common import get_device
 
 
+# The two trackers expect detections in different formats, so each gets a small
+# adapter exposing the same simple method: update(detector_result) -> number of
+# tracks. That lets the timing loop treat them interchangeably.
+
 class _ByteTrackAdapter:
-    """Ultralytics' bundled ByteTrack. update(result) -> #tracks."""
+    """Ultralytics' built-in ByteTrack."""
 
     def __init__(self):
         cfg = yaml.safe_load(open(ROOT / "cfg/trackers/bytetrack.yaml"))
@@ -43,14 +48,14 @@ class _ByteTrackAdapter:
         self.t = BYTETracker(SimpleNamespace(**cfg))
 
     def update(self, r):
-        det = r.boxes.cpu().numpy()              # what Ultralytics feeds the tracker
+        det = r.boxes.cpu().numpy()              # the boxes, in the format ByteTrack wants
         return len(self.t.update(det, r.orig_img))
 
 
 class _SlowTrackAdapter:
-    """SlowTrack's vendored ByteTrack-lineage tracker. update(result) -> #tracks.
-    Its update() wants [N,5]=[x1,y1,x2,y2,score] plus img_info/img_size (equal
-    here so no rescale) and a stage timer."""
+    """SlowTrack's vendored tracker (in src/slowtrack_tracker/). Its update() has
+    a different signature — it wants an [N,5] array of [x1,y1,x2,y2,score], the
+    image size twice (so it does no rescaling), and a timer object."""
 
     def __init__(self, track_thresh):
         from slowtrack_tracker import BYTETracker as STBYTETracker, Timer
@@ -60,16 +65,16 @@ class _SlowTrackAdapter:
         self.timer = Timer()
 
     def update(self, r):
-        xyxy = r.boxes.xyxy.cpu().numpy()
-        conf = r.boxes.conf.cpu().numpy()
-        out = np.concatenate([xyxy, conf[:, None]], axis=1).astype(float)  # [N,5]
-        hw = tuple(int(v) for v in r.orig_shape)                            # (H, W)
+        xyxy = r.boxes.xyxy.cpu().numpy()        # box corners
+        conf = r.boxes.conf.cpu().numpy()        # and their confidences
+        out = np.concatenate([xyxy, conf[:, None]], axis=1).astype(float)  # -> [N,5]
+        hw = tuple(int(v) for v in r.orig_shape)                            # (height, width)
         tracks, _total, _avg = self.t.update(out, hw, hw, self.timer)
         return len(tracks)
 
 
 def _make_tracker(kind, track_thresh):
-    """Fresh tracker adapter. Both expose update(result) -> #tracks."""
+    """Build a fresh tracker of the requested kind (state resets per sequence)."""
     if kind == "slowtrack":
         return _SlowTrackAdapter(track_thresh)
     return _ByteTrackAdapter()
@@ -93,8 +98,10 @@ def _warmup(yolo, path, conf, device, imgsz, tracker_kind=None, reps=3):
 
 
 def measure_detector(yolo, folder, conf, device, imgsz):
+    """Time the detector and count its detections over every frame in `folder`.
+    Run it on the clean folder and the attacked folder and compare the two."""
     paths = _frames(folder)
-    _warmup(yolo, paths[0], conf, device, imgsz)
+    _warmup(yolo, paths[0], conf, device, imgsz)         # discard first-call init cost
     lat, counts = [], []
     for p in paths:
         t = time.perf_counter()
@@ -112,11 +119,11 @@ def measure_detector(yolo, folder, conf, device, imgsz):
 
 
 def measure_tracker(yolo, folder, conf, device, imgsz, tracker_kind="bytetrack"):
-    """Runs the detector per frame, then times the tracker.update() call in
-    ISOLATION (not detector+tracker minus detector — that buries the few-ms
-    tracker signal in detector noise). Reports detector and tracker latency
-    separately so the multiplier is clean. Warms up first; reports median too
-    (robust to the occasional JIT/GC outlier)."""
+    """For every frame: run the detector, then time ONLY the tracker's update()
+    call. Timing the tracker alone (rather than detector+tracker and subtracting)
+    matters because the tracker takes a few ms while the detector takes hundreds —
+    subtracting would drown the tracker signal in detector noise. We warm up first
+    and report the median, which ignores the occasional one-frame timing spike."""
     paths = _frames(folder)
     _warmup(yolo, paths[0], conf, device, imgsz, tracker_kind)
     tracker = _make_tracker(tracker_kind, conf)   # fresh state per sequence
@@ -144,14 +151,16 @@ def measure_tracker(yolo, folder, conf, device, imgsz, tracker_kind="bytetrack")
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=["detector", "tracker"])
-    ap.add_argument("--clean", required=True)
-    ap.add_argument("--adv", required=True)
+    ap.add_argument("mode", choices=["detector", "tracker"],
+                    help="what to measure: the detector, or the downstream tracker")
+    ap.add_argument("--clean", required=True, help="folder of clean frames")
+    ap.add_argument("--adv", required=True, help="folder of attacked frames (same filenames)")
     ap.add_argument("--weights", default="yolov10n.pt")
-    ap.add_argument("--device", default="cpu")
-    ap.add_argument("--conf", type=float, default=0.25)
-    ap.add_argument("--imgsz", type=int, default=640)
-    ap.add_argument("--tracker", choices=["bytetrack", "slowtrack"], default="bytetrack")
+    ap.add_argument("--device", default="cpu", help="cpu, cuda, or auto")
+    ap.add_argument("--conf", type=float, default=0.25, help="detection confidence threshold")
+    ap.add_argument("--imgsz", type=int, default=640, help="model input size")
+    ap.add_argument("--tracker", choices=["bytetrack", "slowtrack"], default="bytetrack",
+                    help="which tracker to time (tracker mode only)")
     args = ap.parse_args()
 
     device = get_device(args.device)
