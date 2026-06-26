@@ -141,20 +141,32 @@ with phantom boxes), perturbation invisible, with detection-count banners.
 
 ## Results
 
-**Detector (still images, dev):** latency ~flat `263 → 222 ms`, detections
-`3.5 → 109` (≈31×). Same-budget random noise does **not** flood.
+**Headline (KITTI Tracking seq 0011, 30 real frames, CPU, warmed, median):**
+the attack floods the detector `5.8 → 94.6` detections/frame (max 123) and the
+**SlowTrack tracker latency goes `0.709 → 3.663 ms = 5.2×`** (active tracks
+`4.7 → 27.4`). See `out/compare_kitti_0011.png` — 6 real detections vs 72
+phantom boxes, perturbation invisible.
 
-**Tracker latency multiplier** (detector stays flat throughout):
+**Tracker latency multiplier** (the headline payload):
 
 | sequence                    | tracker   | clean ms | adv ms | multiplier |
 |-----------------------------|-----------|----------|--------|------------|
-| synthetic 16-frame (legacy) | bytetrack | 0.556    | 3.133  | 5.6×       |
+| **KITTI seq 0011 (real)**   | slowtrack | 0.709    | 3.663  | **5.2×**   |
 | synthetic 16-frame (legacy) | slowtrack | 0.685    | 2.814  | 4.1×       |
-| KITTI seq 0011 (30 frames)  | slowtrack | _pending — filled in when the current run completes_ |
+| synthetic 16-frame (legacy) | bytetrack | 0.556    | 3.133  | 5.6×       |
 
 The primary downstream consumer is **SlowTrack** (`--tracker slowtrack`);
-`--tracker bytetrack` (Ultralytics' bundled ByteTrack) remains available for
-comparison.
+`--tracker bytetrack` remains available.
+
+**On the detector latency — an honest nuance.** The detector's forward is
+fixed-FLOP (verified: clean vs adversarial forward ≈ 193 vs 196 ms in
+isolation), so algorithmically it can't be slowed — that's the NMS-free thesis.
+But end-to-end CPU `predict()` *does* show inference `~113 → 250 ms (≈1.4×)` on
+the flood. That extra cost is a **denormal-float artifact**: the perturbation
+drives subnormal values into the fused Conv+BN path, which is slow on CPU.
+`torch.set_flush_denormal(True)` cuts it from 1.42× to 1.11×, and GPUs flush
+denormals by default — so this is a CPU-test-rig effect, not a real detector
+latency attack. The robust, deployment-relevant payload is the **tracker**.
 
 ---
 

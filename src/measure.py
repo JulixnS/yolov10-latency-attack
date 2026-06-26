@@ -22,6 +22,7 @@ import argparse
 import glob
 import os
 import time
+from statistics import median
 from types import SimpleNamespace
 
 import numpy as np
@@ -81,8 +82,19 @@ def _frames(d):
     )
 
 
+def _warmup(yolo, path, conf, device, imgsz, tracker_kind=None, reps=3):
+    """Pay one-time init costs (model warmup, lap/numpy JIT, first Kalman setup)
+    BEFORE timing, so they don't contaminate the first frame. Uses throwaway
+    tracker instances so the measured tracker's state stays clean."""
+    for _ in range(reps):
+        r = yolo.predict(path, conf=conf, device=device, imgsz=imgsz, verbose=False)[0]
+        if tracker_kind:
+            _make_tracker(tracker_kind, conf).update(r)
+
+
 def measure_detector(yolo, folder, conf, device, imgsz):
     paths = _frames(folder)
+    _warmup(yolo, paths[0], conf, device, imgsz)
     lat, counts = [], []
     for p in paths:
         t = time.perf_counter()
@@ -92,8 +104,9 @@ def measure_detector(yolo, folder, conf, device, imgsz):
     n = len(paths)
     return {
         "n": n,
-        "lat_ms_mean": sum(lat) / n,
-        "det_count_mean": sum(counts) / n,
+        "lat_ms_mean": round(sum(lat) / n, 2),
+        "lat_ms_median": round(median(lat), 2),
+        "det_count_mean": round(sum(counts) / n, 1),
         "det_count_max": max(counts),
     }
 
@@ -102,8 +115,10 @@ def measure_tracker(yolo, folder, conf, device, imgsz, tracker_kind="bytetrack")
     """Runs the detector per frame, then times the tracker.update() call in
     ISOLATION (not detector+tracker minus detector — that buries the few-ms
     tracker signal in detector noise). Reports detector and tracker latency
-    separately so the multiplier is clean."""
+    separately so the multiplier is clean. Warms up first; reports median too
+    (robust to the occasional JIT/GC outlier)."""
     paths = _frames(folder)
+    _warmup(yolo, paths[0], conf, device, imgsz, tracker_kind)
     tracker = _make_tracker(tracker_kind, conf)   # fresh state per sequence
     det_lat, trk_lat, ndet, ntracks = [], [], [], []
     for p in paths:
@@ -118,7 +133,8 @@ def measure_tracker(yolo, folder, conf, device, imgsz, tracker_kind="bytetrack")
     n = len(paths)
     return {
         "n": n,
-        "det_ms_mean": round(sum(det_lat) / n, 2),
+        "det_ms_median": round(median(det_lat), 2),
+        "tracker_ms_median": round(median(trk_lat), 3),
         "tracker_ms_mean": round(sum(trk_lat) / n, 3),
         "tracker_ms_max": round(max(trk_lat), 3),
         "det_count_mean": round(sum(ndet) / n, 1),
