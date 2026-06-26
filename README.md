@@ -154,13 +154,21 @@ that padding, so flooding it would be cheating. (Without the mask the same setup
 reads `5.8 → 94.6` detections / `5.2×`; ~45% of that flood was un-realizable
 padding detections — the content-only numbers below are the honest result.)
 
-**Tracker latency multiplier** (the headline payload):
+**Tracker latency multiplier across four KITTI clips** (30 frames each,
+content-masked, SlowTrack, CPU, warmed, median):
 
-| sequence                    | tracker   | clean ms | adv ms | multiplier |
-|-----------------------------|-----------|----------|--------|------------|
-| **KITTI seq 0011 (real, content-masked)** | slowtrack | 0.684 | 2.136 | **~3.1×** |
-| synthetic 16-frame (legacy) | slowtrack | 0.685    | 2.814  | 4.1×       |
-| synthetic 16-frame (legacy) | bytetrack | 0.556    | 3.133  | 5.6×       |
+| KITTI seq | scene density (clean det/frame) | adv det/frame | tracker clean ms | tracker adv ms | multiplier |
+|---|---|---|---|---|---|
+| 0013 | sparse (2.4) | 46.9 | 0.517 | 1.875 | **3.6×** |
+| 0005 | medium (3.4) | 53.5 | 0.543 | 2.12  | **3.9×** |
+| 0011 | medium (5.8) | 51.7 | 0.684 | 2.136 | **3.1×** |
+| 0020 | dense (6.7)  | 41.5 | 0.684 | 1.74  | **2.5×** |
+
+The attack holds across scenes (**2.5–3.9×**). Note the multiplier is *larger on
+sparser scenes*: the flood saturates at a similar absolute level (~42–53
+detections) regardless of how busy the scene is, so a sparse scene — whose clean
+tracker baseline is tiny — sees a bigger relative jump, while a dense scene
+already keeps the tracker busy and has less headroom.
 
 The primary downstream consumer is **SlowTrack** (`--tracker slowtrack`);
 `--tracker bytetrack` remains available.
