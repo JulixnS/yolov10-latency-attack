@@ -15,7 +15,7 @@ relocates the damage one layer downstream.*
 
 ---
 
-## Thesis, in four numbers
+## Hypothesis
 
 A correct run shows this chain (detector flat, output flooded, noise control
 fails, tracker latency explodes):
@@ -97,7 +97,7 @@ ultralytics 8.4.x).
 python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_adv \
     --device cpu --iters 40
 
-# same-budget random-noise control (must NOT flood)
+# same epsilon value, random-noise (should not flood the detector, detections stay roughly the same)
 python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_noise \
     --device cpu --mode noise
 ```
