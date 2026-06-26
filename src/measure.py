@@ -14,6 +14,9 @@ representative place to run it, not a compromise.
 
     # tracker-side (needs CONSECUTIVE frames / a sequence dir):
     python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv --device cpu
+    # ...with SlowTrack's vendored tracker instead of bundled ByteTrack:
+    python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv \
+        --device cpu --tracker slowtrack
 """
 import argparse
 import glob
@@ -21,6 +24,7 @@ import os
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import yaml
 from ultralytics import YOLO
 from ultralytics.trackers.byte_tracker import BYTETracker
@@ -29,13 +33,45 @@ from ultralytics.utils import ROOT
 from common import get_device
 
 
-def _new_tracker():
-    """Fresh ByteTracker built from Ultralytics' bundled bytetrack.yaml.
-    Swap this for your SlowTrack tracker — the harness only needs an object
-    with `.update(boxes_numpy, orig_img)`."""
-    cfg = yaml.safe_load(open(ROOT / "cfg/trackers/bytetrack.yaml"))
-    cfg.setdefault("fuse_score", True)
-    return BYTETracker(SimpleNamespace(**cfg))
+class _ByteTrackAdapter:
+    """Ultralytics' bundled ByteTrack. update(result) -> #tracks."""
+
+    def __init__(self):
+        cfg = yaml.safe_load(open(ROOT / "cfg/trackers/bytetrack.yaml"))
+        cfg.setdefault("fuse_score", True)
+        self.t = BYTETracker(SimpleNamespace(**cfg))
+
+    def update(self, r):
+        det = r.boxes.cpu().numpy()              # what Ultralytics feeds the tracker
+        return len(self.t.update(det, r.orig_img))
+
+
+class _SlowTrackAdapter:
+    """SlowTrack's vendored ByteTrack-lineage tracker. update(result) -> #tracks.
+    Its update() wants [N,5]=[x1,y1,x2,y2,score] plus img_info/img_size (equal
+    here so no rescale) and a stage timer."""
+
+    def __init__(self, track_thresh):
+        from slowtrack_tracker import BYTETracker as STBYTETracker, Timer
+        args = SimpleNamespace(track_thresh=track_thresh, track_buffer=30,
+                               match_thresh=0.8, mot20=False)
+        self.t = STBYTETracker(args, frame_rate=30)
+        self.timer = Timer()
+
+    def update(self, r):
+        xyxy = r.boxes.xyxy.cpu().numpy()
+        conf = r.boxes.conf.cpu().numpy()
+        out = np.concatenate([xyxy, conf[:, None]], axis=1).astype(float)  # [N,5]
+        hw = tuple(int(v) for v in r.orig_shape)                            # (H, W)
+        tracks, _total, _avg = self.t.update(out, hw, hw, self.timer)
+        return len(tracks)
+
+
+def _make_tracker(kind, track_thresh):
+    """Fresh tracker adapter. Both expose update(result) -> #tracks."""
+    if kind == "slowtrack":
+        return _SlowTrackAdapter(track_thresh)
+    return _ByteTrackAdapter()
 
 
 def _frames(d):
@@ -62,24 +98,23 @@ def measure_detector(yolo, folder, conf, device, imgsz):
     }
 
 
-def measure_tracker(yolo, folder, conf, device, imgsz):
+def measure_tracker(yolo, folder, conf, device, imgsz, tracker_kind="bytetrack"):
     """Runs the detector per frame, then times the tracker.update() call in
     ISOLATION (not detector+tracker minus detector — that buries the few-ms
     tracker signal in detector noise). Reports detector and tracker latency
     separately so the multiplier is clean."""
     paths = _frames(folder)
-    tracker = _new_tracker()              # fresh state per sequence
+    tracker = _make_tracker(tracker_kind, conf)   # fresh state per sequence
     det_lat, trk_lat, ndet, ntracks = [], [], [], []
     for p in paths:
         t = time.perf_counter()
         r = yolo.predict(p, conf=conf, device=device, imgsz=imgsz, verbose=False)[0]
         det_lat.append((time.perf_counter() - t) * 1000)
-        det = r.boxes.cpu().numpy()       # what Ultralytics feeds the tracker
-        ndet.append(len(det))
+        ndet.append(len(r.boxes))
         t = time.perf_counter()
-        tracks = tracker.update(det, r.orig_img)
+        n_tracks = tracker.update(r)              # adapter normalizes both backends
         trk_lat.append((time.perf_counter() - t) * 1000)
-        ntracks.append(len(tracks))
+        ntracks.append(n_tracks)
     n = len(paths)
     return {
         "n": n,
@@ -100,15 +135,19 @@ def main():
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--tracker", choices=["bytetrack", "slowtrack"], default="bytetrack")
     args = ap.parse_args()
 
     device = get_device(args.device)
     yolo = YOLO(args.weights)
-    fn = measure_detector if args.mode == "detector" else measure_tracker
 
-    print(f"== {args.mode} | device={device} ==")
+    print(f"== {args.mode} | device={device}"
+          + (f" | tracker={args.tracker}" if args.mode == "tracker" else "") + " ==")
     for label, folder in (("CLEAN", args.clean), ("ADVERSARIAL", args.adv)):
-        stats = fn(yolo, folder, args.conf, device, args.imgsz)
+        if args.mode == "detector":
+            stats = measure_detector(yolo, folder, args.conf, device, args.imgsz)
+        else:
+            stats = measure_tracker(yolo, folder, args.conf, device, args.imgsz, args.tracker)
         print(f"{label:12s} {stats}")
     print("Expect: detector lat ~flat & count up  |  tracker lat up sharply on ADVERSARIAL")
 

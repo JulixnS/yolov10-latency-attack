@@ -1,0 +1,1 @@
+Vendored from https://github.com/ershang2/SlowTrack (yolox/tracker/) — SlowTrack's ByteTrack-lineage MOT with per-stage timing. Patched: relative imports, np.float->float, debug prints removed.

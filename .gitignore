@@ -10,3 +10,6 @@ __pycache__/
 data/
 out/*
 !out/compare_*.png
+
+# Local tooling (gh CLI downloaded for pushing)
+.tools/

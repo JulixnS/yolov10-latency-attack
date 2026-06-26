@@ -51,11 +51,26 @@ measure both with `measure.py tracker`.
    `common.image_to_tensor` keeps this consistent.
 2. **`--tau` must equal the deployed `conf` threshold** (default 0.25).
 
-## Swapping in the SlowTrack tracker
-`measure.py:measure_tracker` defaults to Ultralytics ByteTrack
-(`tracker="bytetrack.yaml"`). Point it at your SlowTrack tracker for the
-real downstream consumer — the harness already isolates tracker-only time by
-subtracting a detector-only pass.
+## Tracker backends
+`measure.py tracker` supports two downstream consumers via `--tracker`:
+- `bytetrack` (default) — Ultralytics' bundled ByteTrack.
+- `slowtrack` — SlowTrack's ByteTrack-lineage MOT, vendored in
+  `src/slowtrack_tracker/` from https://github.com/ershang2/SlowTrack
+  (patched: relative imports, `np.float`→`float`, debug prints removed).
+
+The harness times `tracker.update()` in isolation and reports detector vs
+tracker latency separately. Both backends show the attack overloading the
+tracker while the detector stays flat (CPU, 16-frame sequence):
+
+| tracker   | clean ms | adv ms | multiplier | tracks clean→adv |
+|-----------|----------|--------|------------|------------------|
+| bytetrack | 0.556    | 3.133  | 5.6×       | 5 → 21           |
+| slowtrack | 0.685    | 2.814  | 4.1×       | 5 → 19           |
+
+```bash
+python src/measure.py tracker --clean data/seq_clean --adv out/seq_adv \
+    --device cpu --tracker slowtrack
+```
 
 ## Honest bounds
 - `max_det` (default 300) caps the per-frame flood; the attack pins the

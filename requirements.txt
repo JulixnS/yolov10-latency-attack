@@ -2,3 +2,9 @@
 # CPU build of torch automatically, which is all this project needs.
 ultralytics>=8.1.0      # ships YOLOv10 + torch + opencv + numpy
 # (torch, torchvision, opencv-python, numpy come in transitively)
+
+# For the vendored SlowTrack tracker (src/slowtrack_tracker/, used by
+# `measure.py --tracker slowtrack`). lap is also pulled by Ultralytics'
+# own tracker; cython_bbox needs a C compiler at install time.
+lap>=0.5.12
+cython_bbox>=0.1.5
