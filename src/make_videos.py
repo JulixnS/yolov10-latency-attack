@@ -10,11 +10,27 @@ run come out the same size and are directly comparable.
 import argparse
 import glob
 import os
+import shutil
+import subprocess
 
 import cv2
 from ultralytics import YOLO
 
 from common import get_device, letterbox
+
+
+def _to_h264(path):
+    """Re-encode in place to H.264/yuv420p so it plays in VSCode/browsers
+    (OpenCV writes mp4v, which their Chromium players can't decode). No-op if
+    ffmpeg is unavailable."""
+    if not shutil.which("ffmpeg"):
+        print("  (ffmpeg not found — leaving mp4v; plays in VLC, not VSCode/browser)")
+        return
+    tmp = path + ".h264.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", path,
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-movflags", "+faststart", tmp], check=True)
+    os.replace(tmp, path)
 
 
 def _frames(d):
@@ -58,6 +74,7 @@ def main():
             frame = cv2.resize(frame, (W, H))
         writer.write(frame)
     writer.release()
+    _to_h264(args.out)
     print(f"wrote {args.out}  ({len(paths)} frames @ {args.fps} fps, {len(paths)/args.fps:.1f}s)")
 
 
