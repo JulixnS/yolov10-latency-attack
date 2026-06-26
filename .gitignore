@@ -13,3 +13,6 @@ out/*
 
 # Local tooling (gh CLI downloaded for pushing)
 .tools/
+
+# KITTI dataset (~15 GB, downloaded locally for real-sequence testing)
+kitti/
