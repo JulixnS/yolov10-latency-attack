@@ -38,7 +38,7 @@ src/
   viz.py             original-vs-attacked comparison image (boxes drawn)
   slowtrack_tracker/ vendored SlowTrack tracker (see its SOURCE_AND_CHANGES doc)
 PLAN.md              phase-by-phase runbook with acceptance checks
-questions.md         Q&A log of the design decisions
+results.md           KITTI results + comparison image
 requirements.txt     ultralytics + slowtrack tracker deps
 ```
 
@@ -203,5 +203,4 @@ change log, and the upstream MIT license are in
 - Built the **isolated-timing** tracker harness (don't subtract detector time).
 - Added a **`--tracker {bytetrack,slowtrack}`** flag and vendored the real
   **SlowTrack** tracker as the downstream consumer.
-- Replaced the early synthetic panning sequence (`make_seq.py`, removed) with
-  **real KITTI Tracking** frames.
+- Settled on **real KITTI Tracking** frames as the evaluation sequence.

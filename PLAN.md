@@ -1,29 +1,37 @@
 # Implementation plan — NMS-free YOLOv10 latency attack on CPU
 
-Goal: get the attack running end-to-end on a laptop CPU and **see what the
-model sees** — the original image with its handful of boxes, side-by-side
-with the attacked image flooded with phantom boxes.
+Goal: get the attack running end-to-end on a laptop CPU against real KITTI
+Tracking footage, ending in the visual deliverable — the original frame with a
+handful of boxes side-by-side with the attacked frame flooded with phantom
+boxes, plus the SlowTrack latency multiplier.
 
-Each phase has a concrete command and an **acceptance check** — don't move
-on until it passes. All files referenced (`src/*.py`, including
-`viz.py`) already exist.
+Each phase has a concrete command and an **acceptance check** — don't move on
+until it passes. All referenced `src/*.py` files already exist.
 
 ---
 
-## Phase 0 — Environment (10 min)
+## Phase 0 — Environment + data
 
 ```bash
 cd /home/julia/LLM-Defense/yolov10-latency-attack
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt          # CPU torch comes in automatically
-mkdir -p data/dev out
-curl -L https://ultralytics.com/images/bus.jpg -o data/dev/bus.jpg
-curl -L https://ultralytics.com/images/zidane.jpg -o data/dev/zidane.jpg
+pip install -r requirements.txt          # CPU torch + lap + cython_bbox
+
+# KITTI Tracking (one-time ~14.7 GB download; kitti/ is gitignored)
+mkdir -p kitti && (cd kitti && \
+  curl -L -C - -o data_tracking_image_2.zip \
+    https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_image_2.zip && \
+  unzip -q data_tracking_image_2.zip 'training/image_02/0011/*')
+
+# 30-frame clean subset of consecutive frames (CPU-tractable)
+mkdir -p data/kitti_0011_clean
+ls kitti/training/image_02/0011/*.png | sort | head -30 \
+  | xargs -I{} cp {} data/kitti_0011_clean/
 ```
 
-**Acceptance:** `python -c "import torch, ultralytics; print('ok')"` prints `ok`,
-and `data/dev/` holds 2 images. The first `yolov10n.pt` reference auto-downloads
-the weights (~5 MB).
+**Acceptance:** `python -c "import torch, ultralytics; print('ok')"` prints
+`ok`, and `data/kitti_0011_clean/` holds 30 PNGs. The first `yolov10n.pt`
+reference auto-downloads the weights (~5 MB).
 
 ---
 
@@ -43,149 +51,94 @@ python src/verify.py --device cpu
 - `input-gradient norm` is **> 0** and prints `OK`.
 
 **If it fails** (shape looks like `[1, 300, 6]`, or gradient is zero): the
-forward returns a post-top-k tensor on your version. Switch `common.dense()`
-to a forward hook on the one2one head — capture the script's printed return
-structure and adapt. Stop here until this passes.
+forward returns a post-top-k tensor on your version. `common.py`'s forward-hook
+path on the one2one head is what recovers it (already handled for ultralytics
+8.4.x). Stop here until this passes.
 
 ---
 
-## Phase 2 — First attack on one image
-
-Run a short attack (low iters for fast CPU iteration) on the dev images.
+## Phase 2 — Craft the attack (feeds every later phase)
 
 ```bash
-python src/attack.py --images data/dev --out output/adv --device cpu --iters 20
+python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_adv \
+    --device cpu --iters 40
 ```
+~10–12 min on a laptop CPU (30 frames × 40 iters).
 
-**Acceptance:** per-image log shows `above-thresh N -> M` with **M ≫ N**
-(e.g. `8 -> 300`). `output/adv/` contains the perturbed images, which look
-near-identical to the originals by eye (that's the eps budget working).
+**Acceptance:** per-frame log shows `above-thresh N -> M` with **M ≫ N**
+(e.g. `4 -> ~100`). `output/kitti_0011_adv/` holds the perturbed frames, which
+look near-identical to the originals by eye (the eps budget working).
 
-**If M doesn't rise:** raise `--iters` (try 50), check `--tau` matches the
-conf threshold, or increase `--eps` toward `16/255` temporarily to confirm
-the mechanism, then dial back.
+**If M doesn't rise:** raise `--iters`, check `--tau` matches the conf
+threshold, or bump `--eps` toward `16/255` temporarily to confirm the
+mechanism, then dial back.
 
 ---
 
 ## Phase 3 — Noise control (load-bearing, not optional)
 
 ```bash
-python src/attack.py --images data/dev --out output/noise --device cpu --mode noise
+python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_noise \
+    --device cpu --mode noise
 ```
 
 **Acceptance:** `above-thresh N -> ~N` (noise at the **same eps** does NOT
-flood). This contrast is the proof that the flood is adversarial, not just
-"any perturbation." Keep these numbers.
+flood). This contrast is the proof the flood is adversarial, not just "any
+perturbation." Keep these numbers.
 
 ---
 
-## Phase 4 — Detector-side measurement (flat latency, count up)
+## Phase 4 — Detector-side measurement
 
 ```bash
-python src/measure.py detector --clean data/dev --adv output/adv --device cpu
+python src/measure.py detector --clean data/kitti_0011_clean \
+    --adv output/kitti_0011_adv --device cpu
 ```
 
-**Acceptance:** `lat_ms_mean` is **~the same** for CLEAN vs ADVERSARIAL
-(detector is fixed compute), while `det_count_mean` jumps toward `max_det`.
-This is half the thesis: detector unmoved, output saturated.
+**Acceptance:** `det_count_mean` jumps toward `max_det` (clean ~6 → adv ~95).
+The detector's *forward* is fixed-FLOP; note that end-to-end CPU `predict()`
+latency may rise ~1.4× — that is a denormal-float artifact (see `results.md`),
+not a real detector-side attack.
 
 ---
 
-## Phase 5 — tracker-side measurement
-
-Needs **real consecutive frames** — a KITTI Tracking sequence (each
-`kitti/training/image_02/<seq>/` is a folder of consecutive PNGs). Pick a
-busy sequence (more objects → higher attack ceiling).
+## Phase 5 — Tracker-side measurement (SlowTrack, the headline)
 
 ```bash
-SEQ=kitti/training/image_02/0011
-python src/attack.py   --images $SEQ --out output/kitti_0011_adv --device cpu --iters 60
-python src/measure.py  tracker --clean $SEQ --adv output/kitti_0011_adv --device cpu --tracker bytetrack
-python src/measure.py  tracker --clean $SEQ --adv output/kitti_0011_adv --device cpu --tracker slowtrack
+python src/measure.py tracker --clean data/kitti_0011_clean \
+    --adv output/kitti_0011_adv --device cpu --tracker slowtrack
 ```
 
-`measure.py tracker` runs the detector per frame, then times the
-`tracker.update()` call **in isolation** (reports `det_ms_mean` and
-`tracker_ms_mean` separately — don't subtract; the detector noise on CPU
-dwarfs the tracker signal).
+`measure.py tracker` runs the detector per frame, then times the SlowTrack
+`update()` call **in isolation** (warmed up, median reported — don't subtract
+detector time; CPU detector noise dwarfs the sub-ms tracker signal).
 
-**Acceptance:** `tracker_ms_mean` is **much larger** on ADVERSARIAL while
-`det_ms_mean` stays flat. That's the other half of the thesis.
-
-**Caveat (important for the writeup):** on this CPU laptop the detector
-(~240 ms) dwarfs the tracker (sub-ms clean). The tracker *multiplier* is the
-real result, because in a real deployment the detector runs on GPU (~5 ms)
-and the tracker becomes the bottleneck — that's the scenario the multiplier
-represents.
+**Acceptance:** `tracker_ms_median` is **much larger** on ADVERSARIAL
+(≈ 0.7 → 3.7 ms, ~5×) while detection count is up ~16×. That's the payload:
+the flood overloads the downstream tracker.
 
 ---
 
 ## Phase 6 — See what the model sees (the deliverable)
 
-Create `src/viz.py` to render **original vs attacked, both with the model's
-boxes drawn**, side by side, annotated with detection counts. Use Ultralytics'
-`results.plot()` (returns an annotated BGR array) and `cv2.hconcat`.
-
-```python
-# src/viz.py
-import argparse, os, cv2, numpy as np
-from ultralytics import YOLO
-from common import get_device
-
-def annotated(yolo, path, conf, device, imgsz):
-    r = yolo.predict(path, conf=conf, device=device, imgsz=imgsz, verbose=False)[0]
-    img = r.plot()                      # BGR with boxes drawn
-    return img, len(r.boxes)
-
-def banner(img, text, h=34):
-    bar = np.zeros((h, img.shape[1], 3), dtype=np.uint8)
-    cv2.putText(bar, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
-    return cv2.vconcat([bar, img])
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--clean", required=True)      # e.g. data/dev/bus.jpg
-    ap.add_argument("--adv", required=True)        # e.g. output/adv/bus.jpg
-    ap.add_argument("--out", default="output/compare.png")
-    ap.add_argument("--weights", default="yolov10n.pt")
-    ap.add_argument("--device", default="cpu")
-    ap.add_argument("--conf", type=float, default=0.25)
-    ap.add_argument("--imgsz", type=int, default=640)
-    a = ap.parse_args()
-    yolo = YOLO(a.weights); dev = get_device(a.device)
-    ci, cn = annotated(yolo, a.clean, a.conf, dev, a.imgsz)
-    ai, an = annotated(yolo, a.adv,   a.conf, dev, a.imgsz)
-    h = max(ci.shape[0], ai.shape[0])               # match heights before hconcat
-    ci = cv2.resize(ci, (ci.shape[1], h)); ai = cv2.resize(ai, (ai.shape[1], h))
-    left  = banner(ci, f"ORIGINAL: {cn} detections")
-    right = banner(ai, f"ATTACKED: {an} detections")
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    cv2.imwrite(a.out, cv2.hconcat([left, right]))
-    print(f"wrote {a.out}  ({cn} -> {an} detections)")
-
-if __name__ == "__main__":
-    main()
-```
-
-Run it:
-
 ```bash
-python src/viz.py --clean data/dev/bus.jpg --adv output/adv/bus.jpg --device cpu
+python src/viz.py --clean data/kitti_0011_clean/000010.png \
+    --adv output/kitti_0011_adv/000010.png \
+    --device cpu --out output/compare_kitti_0011.png
 ```
 
-**Acceptance / done:** `output/compare.png` shows the **original with a few
-boxes** on the left and the **attacked image saturated with boxes** on the
-right (perturbation invisible to the eye, boxes everywhere), with the
-`N -> M` counts in the banners. That is the model's-eye view of the attack.
+**Acceptance / done:** `output/compare_kitti_0011.png` shows the **original
+with a few boxes** on the left and the **attacked frame saturated with boxes**
+on the right (perturbation invisible to the eye), with the `N -> M` counts in
+the banners. That is the model's-eye view of the attack.
 
 ---
 
 ## Summary checklist
-- [ ] P0 env + dev images
+- [ ] P0 env + KITTI 30-frame subset
 - [ ] P1 verify.py prints OK (dense shape, nonzero gradient)
 - [ ] P2 attack floods (`N -> M`, M≫N)
 - [ ] P3 noise control does NOT flood
-- [ ] P4 detector latency flat, count up
-- [ ] P5 (later) tracker latency explodes on a sequence
-- [ ] P6 `output/compare.png`: original vs attacked, boxes drawn ✅
-```
+- [ ] P4 detector count up
+- [ ] P5 SlowTrack tracker latency up ~5×
+- [ ] P6 `output/compare_kitti_0011.png`: original vs attacked, boxes drawn ✅
