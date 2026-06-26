@@ -57,7 +57,7 @@ FILES ADDED (not from upstream)
                        average_time) used ONLY to satisfy the `stage_track_timer`
                        argument that BYTETracker.update() requires. The Timer
                        measures time; it does not affect tracking.
-  SLOWTRACK_SOURCE_AND_CHANGES.txt  — This file.
+  Slowtrack_source_and_changes.txt  — This file.
   LICENSE.upstream   — SlowTrack's MIT License (also reproduced in full below),
                        preserved here as MIT requires when redistributing.
 
