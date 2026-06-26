@@ -37,7 +37,6 @@ src/
   measure.py         latency harness: detector mode + tracker mode (--tracker)
   viz.py             original-vs-attacked comparison image (boxes drawn)
   slowtrack_tracker/ vendored SlowTrack tracker (see its SOURCE_AND_CHANGES doc)
-PLAN.md              phase-by-phase runbook with acceptance checks
 results.md           KITTI results + comparison image
 requirements.txt     ultralytics + slowtrack tracker deps
 ```

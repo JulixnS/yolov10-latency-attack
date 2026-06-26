@@ -13,6 +13,7 @@ output/*
 
 # Personal notes — kept local only, not published
 questions.md
+PLAN.md
 
 # Local tooling (gh CLI downloaded for pushing)
 .tools/
