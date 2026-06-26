@@ -1,1 +1,67 @@
-Vendored from https://github.com/ershang2/SlowTrack (yolox/tracker/) — SlowTrack's ByteTrack-lineage MOT with per-stage timing. Patched: relative imports, np.float->float, debug prints removed.
+================================================================================
+ VENDORED CODE — PROVENANCE & CHANGE LOG
+================================================================================
+
+Source : https://github.com/ershang2/SlowTrack   (directory: yolox/tracker/)
+What   : SlowTrack's ByteTrack-lineage multi-object tracker, with SlowTrack's
+         own per-stage timing instrumentation (the `stage_track_timer` arg in
+         BYTETracker.update).
+Why    : Used as a downstream tracker backend in this repo's latency-attack
+         measurement (measure.py --tracker slowtrack).
+
+All changes below are MECHANICAL (packaging / NumPy-compat / debug cleanup).
+NONE alter the tracking algorithm — Kalman predict/update, the two-stage BYTE
+association, IoU matching, lap linear assignment, track lifecycle, the
+top-500/top-100 detection caps, det_thresh = track_thresh + 0.1, and the
+update(..., stage_track_timer) signature are all unchanged from upstream.
+
+Verify anytime by diffing against a fresh clone:
+    diff <clone>/yolox/tracker/<file>  ./<file>
+
+--------------------------------------------------------------------------------
+FILES COPIED VERBATIM (byte-for-byte identical to upstream)
+--------------------------------------------------------------------------------
+  basetrack.py       — unchanged
+  kalman_filter.py   — unchanged
+
+--------------------------------------------------------------------------------
+FILES MODIFIED
+--------------------------------------------------------------------------------
+byte_tracker.py  (4 edits)
+  1. import path (line 10):
+       - from yolox.tracker import matching
+       + from . import matching
+     Reason: vendored as a standalone package, not the full yolox tree.
+  2. NumPy compat (line 18):
+       - self._tlwh = np.asarray(tlwh, dtype=np.float)
+       + self._tlwh = np.asarray(tlwh, dtype=float)
+     Reason: np.float was removed in NumPy 1.24+/2.x; `float` yields the
+     identical dtype, so this is numerically a no-op.
+  3. removed debug print (was line 194):  print(len(scores_keep), len(scores_second))
+  4. removed debug print (was line 271):  print('matches:', len(matches))
+     Reason: per-frame stdout spam only; no logic.
+
+matching.py  (7 edits)
+  1. import path (line 8):
+       - from yolox.tracker import kalman_filter
+       + from . import kalman_filter
+     Reason: same packaging reason as above.
+  2-7. NumPy compat — np.float -> float on lines 61, 66, 67, 121, 124, 127.
+     Reason: same as byte_tracker.py edit #2; numerically a no-op.
+
+--------------------------------------------------------------------------------
+FILES ADDED (not from upstream)
+--------------------------------------------------------------------------------
+  __init__.py    — Makes this directory an importable package. Re-exports
+                   BYTETracker and defines a minimal `Timer` (tic/toc/
+                   average_time) used ONLY to satisfy the `stage_track_timer`
+                   argument that BYTETracker.update() requires. The Timer
+                   measures time; it does not affect tracking.
+  VENDORED.txt   — This file.
+
+--------------------------------------------------------------------------------
+RUNTIME DEPENDENCIES (see ../../requirements.txt)
+--------------------------------------------------------------------------------
+  lap            — linear assignment solver (also pulled by Ultralytics)
+  cython_bbox    — IoU computation (compiles at install time; builds on aarch64)
+================================================================================
