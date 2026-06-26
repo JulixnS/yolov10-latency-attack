@@ -92,6 +92,12 @@ and a nonzero input-gradient (`OK`). If it instead reports a post-top-k
 ultralytics 8.4.x).
 
 ### Step 1 — craft the attack + the noise control
+
+`attack.py` requires you to **point it at a folder of input frames** with
+`--images`, and writes the perturbed copies to `--out`. Below it's the KITTI
+subset built in the Data step, but `--images` can be any folder of `.png`/`.jpg`
+frames you want to attack — it processes every image in that folder.
+
 ```bash
 # the real KITTI sequence (used for every measurement below)
 python src/attack.py --images data/kitti_0011_clean --out output/kitti_0011_adv \
