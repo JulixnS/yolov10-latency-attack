@@ -3,8 +3,8 @@
 Real autonomous-driving evaluation: white-box PGD overload attack on YOLOv10
 (NMS-free), measured against the **KITTI Tracking** benchmark with the vendored
 **SlowTrack** tracker as the downstream consumer. Evaluated on four sequences
-spanning sparse to dense scenes (seq 0011 below is the detailed walkthrough; the
-four-clip summary is further down).
+spanning a range of clean detection counts (few to many objects per frame; seq
+0011 below is the detailed walkthrough, with the four-clip summary further down).
 
 ## Visual: what the model sees
 
@@ -70,34 +70,35 @@ camera-realizable change to the frame, even though the detector removed NMS
 specifically to be end-to-end. The latency surface didn't disappear — it
 relocated to the tracker.
 
-## Across four scenes (sparse → dense)
+## Across four KITTI clips
 
 The same attack and measurement on four different KITTI sequences (30 frames
 each, SlowTrack, median):
 
-| seq | scene density (clean det/frame) | adv det/frame | tracker clean ms | tracker adv ms | multiplier |
+| seq | clean det/frame | adv det/frame | tracker clean ms | tracker adv ms | multiplier |
 |---|---|---|---|---|---|
-| 0013 | sparse (2.4) | 46.9 | 0.517 | 1.875 | **3.6×** |
-| 0005 | medium (3.4) | 53.5 | 0.543 | 2.12  | **3.9×** |
-| 0011 | medium (5.8) | 51.7 | 0.684 | 2.136 | **3.1×** |
-| 0020 | dense (6.7)  | 41.5 | 0.684 | 1.74  | **2.5×** |
+| 0013 | 2.4 | 46.9 | 0.517 | 1.875 | **3.6×** |
+| 0005 | 3.4 | 53.5 | 0.543 | 2.12  | **3.9×** |
+| 0011 | 5.8 | 51.7 | 0.684 | 2.136 | **3.1×** |
+| 0020 | 6.7 | 41.5 | 0.684 | 1.74  | **2.5×** |
 
-The effect holds across scenes (**2.5–3.9×**). The multiplier is *larger on
-sparser scenes*: the flood saturates at a similar absolute level (~42–53
-detections) no matter how busy the scene starts, so a sparse scene — with a tiny
-clean tracker baseline — sees the biggest relative jump, while a dense scene
-already keeps the tracker busy and has less headroom.
+The effect holds across all four clips (**2.5–3.9×**). The multiplier is *larger
+when the scene starts with fewer real objects*: the flood saturates at a similar
+absolute level (~42–53 detections) no matter how many objects the scene starts
+with, so a clip with a low clean detection count — and thus a tiny clean tracker
+baseline — sees the biggest relative jump, while a busier clip already keeps the
+tracker working and has less headroom.
 
 Comparison images (frame 000010; original vs attacked, boxes the model's own
 predictions, perturbation invisible, flood confined to the scene content):
 
-**0013 — sparse (2 → 47 detections)**
+**seq 0013 (2 → 47 detections)**
 ![KITTI seq 0013](output/compare_kitti_0013.png)
 
-**0005 — medium (6 → 62 detections)**
+**seq 0005 (6 → 62 detections)**
 ![KITTI seq 0005](output/compare_kitti_0005.png)
 
-**0020 — dense (7 → 56 detections)**
+**seq 0020 (7 → 56 detections)**
 ![KITTI seq 0020](output/compare_kitti_0020.png)
 
 ## Detector latency — honest caveat
