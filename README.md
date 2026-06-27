@@ -191,17 +191,6 @@ on CPU. In a controlled same-frame test the denormal-attributable slowdown is
 denormals by default — so this is a CPU-test-rig effect, not a real detector
 latency attack. The robust, deployment-relevant payload is the **tracker**.
 
----
-
-## Two pitfalls (see code comments)
-
-1. **Craft in the model's 640×640 letterboxed [0,1] space**, not on the raw
-   JPEG — re-letterboxing a perturbed JPEG resamples and washes out delta.
-   `common.image_to_tensor` keeps this consistent.
-2. **`--tau` must equal the deployed `conf` threshold** (default 0.25) — the
-   attack parks detections just above that line.
-
-
 ## SlowTrack tracker
 
 `src/slowtrack_tracker/` is SlowTrack's ByteTrack-lineage MOT, vendored from
