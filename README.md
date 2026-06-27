@@ -15,15 +15,22 @@ relocates the damage one layer downstream.*
 
 ---
 
-## Hypothesis
+## What the attack looks like
 
-A correct run shows this chain (detector flat, output flooded, noise control
-fails, tracker latency explodes):
+Original (left) vs attacked (right) on four KITTI clips — the perturbation is
+imperceptible, but the detector jumps from a handful of detections to a flood
+(boxes are the model's own predictions, confined to the scene content):
 
-1. detector latency: ~unchanged (fixed compute)
-2. detections/frame: up ~15–30×
-3. same-budget random noise: does **not** flood (the control)
-4. tracker latency: up several × while the detector stays flat
+<table>
+  <tr>
+    <td align="center"><img src="output/compare_kitti_0011.png" width="420"><br><sub><b>seq 0011</b> — 6 → 50 detections</sub></td>
+    <td align="center"><img src="output/compare_kitti_0005.png" width="420"><br><sub><b>seq 0005</b> — 6 → 62 detections</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="output/compare_kitti_0013.png" width="420"><br><sub><b>seq 0013</b> — 2 → 47 detections</sub></td>
+    <td align="center"><img src="output/compare_kitti_0020.png" width="420"><br><sub><b>seq 0020</b> — 7 → 56 detections</sub></td>
+  </tr>
+</table>
 
 ---
 
@@ -155,9 +162,9 @@ reads `5.8 → 94.6` detections / `5.2×`; ~45% of that flood was un-realizable
 padding detections — the content-only numbers below are the honest result.)
 
 **Tracker latency multiplier across four KITTI clips** (30 frames each,
-content-masked, SlowTrack, CPU, warmed, median):
+SlowTrack, CPU, median):
 
-| KITTI seq | clean det/frame | adv det/frame | tracker clean ms | tracker adv ms | multiplier |
+| KITTI seq | clean detects | adv detects | tracker clean ms | tracker adv ms | multiplier |
 |---|---|---|---|---|---|
 | 0013 | 2.4 | 46.9 | 0.517 | 1.875 | **3.6×** |
 | 0005 | 3.4 | 53.5 | 0.543 | 2.12  | **3.9×** |
@@ -194,19 +201,8 @@ latency attack. The robust, deployment-relevant payload is the **tracker**.
 2. **`--tau` must equal the deployed `conf` threshold** (default 0.25) — the
    attack parks detections just above that line.
 
-## Honest bounds
 
-- `max_det` (default 300) caps the per-frame flood; the attack pins the
-  pipeline at that worst case *every frame*, it does not grow unbounded.
-- On a CPU laptop the detector (~hundreds of ms) dwarfs the tracker (sub-ms).
-  The tracker **multiplier** is the result — in a real deployment the detector
-  runs on GPU (~ms) and the tracker is the bottleneck, which is the regime the
-  multiplier represents.
-- The random-noise control must FAIL to flood — that contrast is the proof the
-  NMS-free head's learned suppression is robust to noise but not to adversarial
-  input.
-
-## Vendored SlowTrack tracker
+## SlowTrack tracker
 
 `src/slowtrack_tracker/` is SlowTrack's ByteTrack-lineage MOT, vendored from
 https://github.com/ershang2/SlowTrack with only mechanical patches (relative
@@ -215,15 +211,3 @@ change log, and the upstream MIT license are in
 `src/slowtrack_tracker/Slowtrack_source_and_changes.txt`.
 
 ---
-
-## What changed during development (summary)
-
-- Re-scoped from YOLOv11 (uses NMS) to **YOLOv10** (NMS-free) — the attack must
-  defeat the head's *learned* suppression and push damage downstream.
-- Added a **forward-hook dense-tensor extractor** in `common.py` because
-  ultralytics 8.4.x returns a post-top-k tensor and builds its one2one branch
-  from detached features (neither is differentiable to the input).
-- Built the **isolated-timing** tracker harness (don't subtract detector time).
-- Added a **`--tracker {bytetrack,slowtrack}`** flag and vendored the real
-  **SlowTrack** tracker as the downstream consumer.
-- Settled on **real KITTI Tracking** frames as the evaluation sequence.
