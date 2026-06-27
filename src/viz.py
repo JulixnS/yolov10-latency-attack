@@ -17,12 +17,15 @@ from common import get_device
 
 
 def annotated(yolo, path, conf, device, imgsz):
-    """Run the real (NMS-free) postprocess and return (boxes-drawn BGR, count)."""
+    """Run the detector on the image and draw ITS OWN predicted boxes on it
+    (these are model predictions, not ground-truth labels). Returns the
+    boxes-drawn image and the number of detections."""
     r = yolo.predict(path, conf=conf, device=device, imgsz=imgsz, verbose=False)[0]
-    return r.plot(), len(r.boxes)        # r.plot() -> annotated BGR array
+    return r.plot(), len(r.boxes)        # r.plot() draws the predicted boxes
 
 
 def banner(img, text, h=34):
+    """Stack a black title bar with `text` on top of the image."""
     bar = np.zeros((h, img.shape[1], 3), dtype=np.uint8)
     cv2.putText(bar, text, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (255, 255, 255), 2, cv2.LINE_AA)

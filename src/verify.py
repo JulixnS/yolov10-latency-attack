@@ -1,9 +1,12 @@
-"""STEP 0 — run this before anything else.
+"""STEP 0 — a 30-second self-check. Run this before anything else.
 
-Confirms the shape of the YOLOv10 dense one2one tensor on YOUR installed
-Ultralytics version, and that gradients flow from confidences back to the
-input. If `dense()` raises, this script tells you what the model actually
-returned so you can adapt common.py (typically via a forward hook).
+The attack relies on a hook into the model (see common.py) that depends on
+exactly how your installed Ultralytics version structures YOLOv10. This script
+confirms two things on YOUR setup:
+  1. `dense()` returns the full per-anchor confidence tensor (~8400 values), and
+  2. gradients actually flow from those confidences back to the input pixels.
+If either fails, nothing downstream can work — so check here first. A failure
+prints what the model actually returned, so you can adapt common.py's hook.
 
 Usage:
     python src/verify.py --weights yolov10n.pt --device cpu
